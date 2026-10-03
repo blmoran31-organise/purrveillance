@@ -710,7 +710,7 @@ function CatEntry(id) {
     for (const b of $app.querySelectorAll('[data-efriend]')) b.onclick = () => { keepEd(); ed.friendliness = ed.friendliness === b.dataset.efriend ? '' : b.dataset.efriend; render(); };
     document.getElementById('ecancel').onclick = () => { S.editing = null; S.editDraft = null; render(); };
     document.getElementById('esave').onclick = () => { keepEd(); const d = S.editDraft; S.editing = null; S.editDraft = null;
-      saveCat(id, { coats: d.coats, longHaired: d.longHaired, coat: L.coatText(d.coats, d.longHaired), swatch: L.swatchFromCoats(d.coats, id, d.longHaired), markings: d.markings.trim(), collar: d.collar, collarColour: d.collar ? d.collarColour.trim() : '', friendliness: d.friendliness, homeNote: d.homeNote.trim(), notes: d.notes.trim() }, 'Details saved'); };
+      saveCat(id, { coats: d.coats, longHaired: d.longHaired, coat: L.coatText(d.coats, d.longHaired), swatch: L.swatchFromCoats(d.coats, id, d.longHaired), markings: d.markings.trim(), collar: d.collar, collarColour: d.collar ? d.collarColour.trim() : '', friendliness: d.friendliness, homeNote: d.homeNote.trim(), homeNoteAuto: !!c.homeNoteAuto && d.homeNote.trim() === (c.homeNote || ''), notes: d.notes.trim() }, 'Details saved'); };
   }
   const rn = document.getElementById('rn');
   if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
@@ -787,11 +787,12 @@ function CatEntry(id) {
 // Sends only the home pin's coordinates; any failure leaves Home empty and the cat page says "pinned on the map".
 async function fillHome(catId, place) {
   try {
-    const c = S.byId.get(catId)?.cat; if (c && c.homeNote) return;
+    // Text Beth typed is never overwritten; text the app filled itself follows the latest Lives-here (latest wins).
+    const c = S.byId.get(catId)?.cat; if (c && c.homeNote && !c.homeNoteAuto) return;
     const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${place.lat}&lon=${place.lng}`, { headers: { 'Accept-Language': 'en-GB' } });
     const a = (await r.json()).address || {};
     const t = [a.house_number, a.road].filter(Boolean).join(' ') || a.suburb || '';
-    if (t) await S.store.patch('cats', catId, { homeNote: t });
+    if (t) await S.store.patch('cats', catId, { homeNote: t, homeNoteAuto: true });
   } catch (x) { console.warn('fillHome', x); }
 }
 

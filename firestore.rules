@@ -1,0 +1,16 @@
+rules_version = '2';
+// PURRVEILLANCE Firestore rules. Paste into Firebase console > Firestore Database > Rules > Publish.
+// Data lives under houses/{HOUSE}/{cats|sightings|photos}/{id}. Only a phone that knows the
+// 20-character house code (from the bookmarked link) can name the path. The houses list itself
+// cannot be read, so codes cannot be browsed. Nothing can be deleted from the app.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /houses/{house}/{coll}/{id} {
+      allow get, list: if request.auth != null && house.size() >= 20
+        && coll in ['cats', 'sightings', 'photos'];
+      allow create, update: if request.auth != null && house.size() >= 20
+        && coll in ['cats', 'sightings', 'photos']
+        && (coll != 'photos' || request.resource.data.data.size() < 400000);
+    }
+  }
+}

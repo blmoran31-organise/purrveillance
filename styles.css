@@ -193,3 +193,17 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .setup .box { background: var(--surface); border-radius: 14px; padding: 12px; font-size: 13px; overflow-wrap: anywhere; }
 :focus-visible { outline: 3px solid var(--marigold); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Meowmeries (Job 6, no mockup: built from the Repurrt parts) */
+.memcard { border: 1px solid var(--line); border-radius: 16px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.memcard.off { opacity: 0.55; }
+.memtop { display: flex; gap: 12px; align-items: center; }
+.memthumb { width: 72px; height: 72px; border-radius: 12px; flex: 0 0 auto; background-size: cover; background-position: center; background-color: var(--surface); }
+.memtxt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.memtxt b { font-size: 15px; }
+.memtxt small { font-size: 12px; color: var(--caption); }
+.memtxt small.warnline { color: var(--ginger); font-weight: 600; }
+.memrow { display: flex; gap: 8px; }
+.memrow select { flex: 1; min-width: 0; font-size: 15px; }
+.ghost { height: 48px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 14px; flex: 0 0 auto; }
+.linkbtn { background: none; border: 0; color: var(--caption); font-size: 13px; text-decoration: underline; align-self: flex-start; padding: 4px 0; min-height: 32px; }

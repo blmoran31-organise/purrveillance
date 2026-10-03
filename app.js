@@ -99,7 +99,7 @@ function render() {
   killMaps();
   if (r.name !== 'camera') stopCamera();
   if (r.name !== 'cat') S.renaming = null;
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum };
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum };
   (screens[r.name] || Catflap)(r.arg);
   if (S.toast) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = S.toast; $app.appendChild(t); const msg = S.toast; setTimeout(() => { if (S.toast === msg) { S.toast = null; t.remove(); } }, 4000); }
   hydratePhotos();
@@ -138,7 +138,7 @@ function Catflap() {
     <div class="pad stack" style="padding-bottom:20px">${flash}
       <div class="tiles2">
         <a class="tile go" href="#/camera">${I.paw}<b>Spotted one</b></a>
-        <a class="tile" href="#/repurrt" data-fresh>${I.gallery}<div style="display:flex;flex-direction:column;gap:2px"><b>Repurrt</b><small>no photo, just log where and who</small></div></a>
+        <a class="tile" href="#/meowmeries">${I.gallery}<div style="display:flex;flex-direction:column;gap:2px"><b>Meowmeries</b><small>drop old photos, each logged by its time and place</small></div></a>
       </div>
       <div class="strip"><div class="l">Purrometer this week</div><div class="r"><span><b>Beth</b> ${purr.beth} pet${purr.beth === 1 ? '' : 's'}</span><span><b>Canada</b> ${purr.canada} pet${purr.canada === 1 ? '' : 's'}</span></div></div>
     </div></div>${nav('catflap')}`;
@@ -341,6 +341,128 @@ async function saveDraft(d) {
   return catId;
 }
 
+// ---------- MEOWMERIES (Job 6): old photos, each a sighting at its own time and place ----------
+// Photos with GPS are placed from the photo; the rest get a "Place it" pin. One batch confirm at the end.
+// A photo already logged (same file name, size and time taken) is marked and skipped, so a re-import can't double-count.
+async function readOldPhoto(file) {
+  let gps = null, at = null;
+  try { if (window.exifr) { gps = await window.exifr.gps(file); const t = await window.exifr.parse(file, ['DateTimeOriginal', 'CreateDate']); const d = t && (t.DateTimeOriginal || t.CreateDate); if (d instanceof Date && !isNaN(d)) at = d.getTime(); } } catch (e) { console.warn('exif', e); }
+  const img = await loadImage(file);
+  const photo = await makeThumb(img, img.naturalWidth, img.naturalHeight);
+  const has = gps && typeof gps.latitude === 'number';
+  const when = at || file.lastModified || Date.now();
+  return { key: [file.name, file.size, when].join('|'), name: file.name, photo, at: when, atSource: at ? 'exif' : 'file', lat: has ? gps.latitude : undefined, lng: has ? gps.longitude : undefined, source: has ? 'exif' : null, catId: '', include: true };
+}
+
+function Meowmeries() {
+  if (!S.mem) S.mem = { items: [], who: S.me || 'beth', newCats: {}, placing: null, busy: null, nextNew: 1 };
+  const M = S.mem, now = Date.now();
+  const logged = new Set(S.data.sightings.map(s => s.sourceKey).filter(Boolean));
+  for (const it of M.items) it.dup = logged.has(it.key);
+  const live = M.items.filter(it => it.include && !it.dup);
+  const ready = live.filter(it => it.catId && typeof it.lat === 'number');
+  const waiting = live.length - ready.length;
+  const newLabel = id => (M.newCats[id].name.trim() || 'New cat ' + id.split(':')[1]);
+  const options = it => {
+    const base = typeof it.lat === 'number' ? L.nearest(S.sums, { lat: it.lat, lng: it.lng }) : S.sums.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
+    const seen = new Set(base.map(e => e.cat.id));
+    const rest = S.sums.filter(e => !seen.has(e.cat.id));
+    return `<option value="">Which cat?</option>
+      ${Object.keys(M.newCats).map(id => `<option value="${id}" ${it.catId === id ? 'selected' : ''}>New: ${esc(newLabel(id))}</option>`).join('')}
+      ${[...base, ...rest].map(e => `<option value="${esc(e.cat.id)}" ${it.catId === e.cat.id ? 'selected' : ''}>${esc(L.displayName(e.cat))}${isFinite(e.distance) ? ' · ' + L.distWord(e.distance) : ''}</option>`).join('')}
+      <option value="+new">+ New cat</option>`;
+  };
+  const card = (it, i) => {
+    const placed = typeof it.lat === 'number';
+    const isNew = it.catId.startsWith('new:');
+    const status = it.dup ? 'Already logged, skipped' : !it.include ? 'Skipped' : placed ? (it.source === 'exif' ? 'Placed from the photo' : 'Placed by hand') : 'No location in this photo';
+    return `<div class="memcard ${!it.include || it.dup ? 'off' : ''}">
+      <div class="memtop"><div class="memthumb" style="background-image:url('${it.photo.data}')"></div>
+        <div class="memtxt"><b>${esc(L.longStamp(it.at))}</b><small>${it.atSource === 'exif' ? 'time from the photo' : 'no time in the photo: file date used'}</small>
+          <small class="${placed || it.dup || !it.include ? '' : 'warnline'}">${status}</small></div></div>
+      ${it.dup ? '' : it.include ? `
+        <div class="memrow"><select class="field memsel" data-i="${i}" aria-label="Which cat is in photo ${i + 1}">${options(it)}</select>
+          <button class="ghost" data-place="${i}">${placed ? 'Move pin' : 'Place it'}</button></div>
+        ${isNew ? `<input class="field" data-newname="${esc(it.catId)}" value="${esc(M.newCats[it.catId].name)}" placeholder="Name the new cat (optional)" aria-label="Name for the new cat">` : ''}
+        ${M.placing === i ? `<div class="wheremap"><div id="pmap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="ghost" data-placedone="${i}">Done</button>` : ''}
+        <button class="linkbtn" data-skip="${i}">Skip this photo</button>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
+    </div>`;
+  };
+  $app.innerHTML = `${banner()}<div class="screen">
+    <div class="formhead"><button class="back" id="back">${I.back}Back</button><div style="font-size:18px;font-weight:700">MEOWMERIES</div><div style="width:50px"></div></div>
+    <div class="pad stack" style="gap:12px;padding-bottom:16px">
+      <label class="addphoto">${I.gallery}<span style="font-size:15px;font-weight:600">${M.items.length ? 'Add more old photos' : 'Pick old photos'}</span><span class="sub" style="font-size:13px">pick several at once</span>
+        <input id="mempick" type="file" accept="image/*" multiple aria-label="Pick old photos"></label>
+      ${M.busy ? `<div class="note">${esc(M.busy)}</div>` : ''}
+      ${M.items.length ? `<div class="stack8"><div class="label">Who saw these</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-mwho="${p}" class="${M.who === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>` : `<div class="empty">Each photo becomes a sighting at the time and place it was taken.<br>Photos with no location get a pin you place by hand.</div>`}
+      ${M.items.map(card).join('')}
+    </div></div>
+    ${M.items.length ? `<div class="savebar"><button class="primary" id="memsave" ${ready.length && !waiting && !M.busy ? '' : 'disabled'}>${ready.length ? `Log ${ready.length} sighting${ready.length === 1 ? '' : 's'}` : 'Nothing ready to log'}</button>
+      <div class="note">${waiting ? `${waiting} photo${waiting === 1 ? '' : 's'} still need${waiting === 1 ? 's' : ''} a cat or a place, or skip ${waiting === 1 ? 'it' : 'them'}` : 'Saves to both phones'}</div><div class="err" id="memerr" hidden></div></div>` : ''}`;
+
+  document.getElementById('back').onclick = () => { if (!M.busy) S.mem = null; go('catflap'); };
+  document.getElementById('mempick').onchange = async e => {
+    const files = [...(e.target.files || [])]; if (!files.length) return;
+    let k = 0, failed = 0;
+    for (const f of files) {
+      M.busy = `Reading ${++k} of ${files.length}…`; render();
+      try { const it = await readOldPhoto(f); if (!M.items.some(x => x.key === it.key)) M.items.push(it); } catch { failed++; }
+    }
+    M.items.sort((a, b) => a.at - b.at);
+    M.busy = failed ? `${failed} photo${failed === 1 ? '' : 's'} could not be opened here and ${failed === 1 ? 'was' : 'were'} left out.` : null;
+    render();
+  };
+  for (const b of $app.querySelectorAll('[data-mwho]')) b.onclick = () => { M.who = b.dataset.mwho; render(); };
+  for (const s of $app.querySelectorAll('.memsel')) s.onchange = () => {
+    const it = M.items[+s.dataset.i];
+    if (s.value === '+new') { const id = 'new:' + M.nextNew++; M.newCats[id] = { name: '' }; it.catId = id; } else it.catId = s.value;
+    render();
+  };
+  for (const n of $app.querySelectorAll('[data-newname]')) n.onchange = () => { M.newCats[n.dataset.newname].name = n.value; render(); };
+  for (const b of $app.querySelectorAll('[data-skip]')) b.onclick = () => { const it = M.items[+b.dataset.skip]; it.include = !it.include; if (M.placing === +b.dataset.skip) M.placing = null; render(); };
+  for (const b of $app.querySelectorAll('[data-place]')) b.onclick = () => { M.placing = +b.dataset.place; render(); };
+  for (const b of $app.querySelectorAll('[data-placedone]')) b.onclick = () => { M.placing = null; render(); };
+  if (M.placing !== null && document.getElementById('pmap')) {
+    const it = M.items[M.placing];
+    const start = typeof it.lat === 'number' ? it : (S.pos || lastKnownPlace());
+    const m = makeMap(document.getElementById('pmap'), { attributionControl: false });
+    m.setView(start ? [start.lat, start.lng] : [54.5, -3], start ? 17 : 5);
+    const set = ll => { it.lat = ll.lat; it.lng = ll.lng; it.source = 'manual'; mk.setLatLng(ll); };
+    const mk = window.L.marker(start ? [start.lat, start.lng] : [54.5, -3], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
+    mk.on('dragend', () => set(mk.getLatLng()));
+    m.on('click', ev => set(ev.latlng));
+    if (!start) getPos().then(p => { if (p && M.placing !== null) m.setView([p.lat, p.lng], 17); });
+  }
+  const sv = document.getElementById('memsave');
+  if (sv) sv.onclick = async () => {
+    sv.disabled = true;
+    const er = document.getElementById('memerr');
+    const made = {}; let n = 0;
+    try {
+      for (const it of ready) {
+        sv.textContent = `Saving ${++n} of ${ready.length}…`;
+        let catId = it.catId;
+        if (catId.startsWith('new:')) {
+          if (!made[catId]) { made[catId] = newId(); await S.store.put('cats', made[catId], { name: M.newCats[catId].name.trim(), coat: '', swatch: L.swatchFor('', made[catId]), markings: '', homeNote: '', favourite: false, createdAt: Date.now(), createdBy: S.me || M.who, thumbPhotoId: null }); }
+          catId = made[catId];
+        }
+        const photoId = newId();
+        await S.store.put('photos', photoId, { data: it.photo.data, w: it.photo.w, h: it.photo.h, catId, at: it.at, createdAt: Date.now() });
+        const cat = S.byId.get(catId);
+        if (!cat || !cat.cat.thumbPhotoId || (cat.last !== null && it.at >= cat.last)) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
+        await S.store.put('sightings', newId(), { catId, at: it.at, lat: it.lat, lng: it.lng, locationSource: it.source, seenBy: M.who, insideOutside: 'outside', petted: false, note: '', photoId, sourceKey: it.key, createdAt: Date.now(), createdBy: S.me || M.who });
+        it.include = false; it.saved = true;
+      }
+      S.mem = null; S.toast = `Logged ${ready.length} old sighting${ready.length === 1 ? '' : 's'} · saved to both phones`; go('catalogue');
+    } catch (x) {
+      console.error(x);
+      M.items = M.items.filter(it => !it.saved);
+      M.busy = `Stopped after ${n - 1} of ${ready.length}: ${x.code || x.message || x}. The saved ones are off this list; check signal and log the rest.`;
+      render(); M.busy = null;
+    }
+  };
+}
+
 // ---------- 5. THE CATALOGUE ----------
 function Catalogue() {
   const now = Date.now();
@@ -484,7 +606,7 @@ async function boot() {
     S.error = null; setData(d);
     const r = route().name;
     // Don't redraw a form or the camera under someone's thumb; they pick up new data on their next screen.
-    if (first || !['repurrt', 'camera'].includes(r) && !S.renaming) render();
+    if (first || !['repurrt', 'camera', 'meowmeries'].includes(r) && !S.renaming) render();
     first = false;
   });
 }

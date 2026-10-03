@@ -112,9 +112,13 @@ function render() {
   if (r.name !== 'camera') stopCamera();
   if (r.name !== 'cat') S.renaming = null;
   const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum };
-  (screens[r.name] || Catflap)(r.arg);
-  if (S.toast) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = S.toast; $app.appendChild(t); const msg = S.toast; setTimeout(() => { if (S.toast === msg) { S.toast = null; t.remove(); } }, 4000); }
-  hydratePhotos();
+  // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
+  try { (screens[r.name] || Catflap)(r.arg); }
+  catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
+  finally {
+    if (S.toast) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = S.toast; $app.appendChild(t); const msg = S.toast; setTimeout(() => { if (S.toast === msg) { S.toast = null; t.remove(); } }, 4000); }
+    hydratePhotos();
+  }
 }
 
 // ---------- 1. CATFLAP ----------

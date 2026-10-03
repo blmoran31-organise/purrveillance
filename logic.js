@@ -53,8 +53,20 @@ export function summarise(cats, sightings) {
 }
 
 // Where a cat is pinned on the Meow Map: its latest sighting with a position.
+// A pin counts only when BOTH lat and lng are real numbers (a lat-only sighting broke the cat page live, 2026-10-03).
+// One clean form for a place: two real numbers in range, or null. Strings that hold numbers are accepted and converted.
+export function coord(v) {
+  const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? n : null;
+}
+export function cleanPlace(lat, lng) {
+  const a = coord(lat), b = coord(lng);
+  return a === null || b === null || Math.abs(a) > 90 || Math.abs(b) > 180 ? null : { lat: a, lng: b };
+}
+export const hasPin = s => cleanPlace(s.lat, s.lng) !== null;
+
 export function lastPosition(summary) {
-  const s = summary.sightings.find(x => typeof x.lat === 'number' && typeof x.lng === 'number');
+  const s = summary.sightings.find(hasPin);
   return s ? { lat: s.lat, lng: s.lng } : null;
 }
 
@@ -64,15 +76,15 @@ export function nearest(summaries, pos, radius = Infinity) {
   const out = [];
   for (const e of summaries) {
     let best = Infinity;
-    for (const s of e.sightings) if (typeof s.lat === 'number') best = Math.min(best, metres(pos, s));
-    if (best <= radius) out.push({ ...e, distance: best });
+    for (const s of e.sightings) if (hasPin(s)) best = Math.min(best, metres(pos, s));
+    if (Number.isFinite(best) && best <= radius) out.push({ ...e, distance: best });
   }
   return out.sort((a, b) => a.distance - b.distance);
 }
 
 // Territory spread: furthest pin from the centre of all pins, in metres.
 export function territory(summary) {
-  const pts = summary.sightings.filter(s => typeof s.lat === 'number');
+  const pts = summary.sightings.filter(hasPin);
   if (!pts.length) return { pins: 0, radius: 0, centre: null };
   const centre = { lat: pts.reduce((a, s) => a + s.lat, 0) / pts.length, lng: pts.reduce((a, s) => a + s.lng, 0) / pts.length };
   return { pins: pts.length, radius: Math.max(...pts.map(s => metres(centre, s))), centre };

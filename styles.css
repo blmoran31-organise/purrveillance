@@ -207,3 +207,7 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .memrow select { flex: 1; min-width: 0; font-size: 15px; }
 .ghost { height: 48px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; font-size: 14px; flex: 0 0 auto; }
 .linkbtn { background: none; border: 0; color: var(--caption); font-size: 13px; text-decoration: underline; align-self: flex-start; padding: 4px 0; min-height: 32px; }
+.hero .pencil, .hero .round { flex: 0 0 auto; }
+.hero .nm { min-width: 0; overflow-wrap: anywhere; }
+.mapfail { position: absolute; inset: 0; z-index: 800; display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px; background: var(--map); color: var(--ink); font-size: 13px; font-weight: 600; }
+.crash { position: fixed; left: 8px; right: 8px; top: calc(8px + env(safe-area-inset-top, 0px)); z-index: 2000; background: var(--ginger); color: #FFFFFF; border-radius: 12px; padding: 10px 12px; font-size: 13px; font-weight: 600; }

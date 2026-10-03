@@ -52,6 +52,8 @@ function banner() {
 
 // ---------- data ----------
 function setData(d) {
+  const sightings = d.sightings.map(s => { const p = L.cleanPlace(s.lat, s.lng); return { ...s, lat: p ? p.lat : null, lng: p ? p.lng : null }; });
+  d = { cats: d.cats, sightings };
   S.data = d; S.sums = L.summarise(d.cats, d.sightings);
   S.byId = new Map(S.sums.map(e => [e.cat.id, e]));
 }
@@ -74,18 +76,28 @@ function getPos(maxAge = 60000) {
 }
 function lastKnownPlace() {
   let best = null;
-  for (const s of S.data.sightings) if (typeof s.lat === 'number' && (!best || s.at > best.at)) best = s;
+  for (const s of S.data.sightings) if (L.hasPin(s) && (!best || s.at > best.at)) best = s;
   return best ? { lat: best.lat, lng: best.lng } : null;
 }
 
 // ---------- maps ----------
 function killMaps() { for (const m of S.maps) { try { m.remove(); } catch { } } S.maps = []; }
 function makeMap(el, opts = {}) {
+  if (!window.L || !window.L.map) throw new Error("the map library didn't load, check signal and reload");
   const m = window.L.map(el, { zoomControl: false, attributionControl: true, ...opts });
   window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(m);
   S.maps.push(m); return m;
 }
 const divIcon = html => window.L.divIcon({ html, className: '', iconSize: [0, 0] });
+// Run map drawing so a failure shows ON the map box and never blanks the rest of the screen.
+function guardMap(el, label, fn) {
+  try { return fn(); }
+  catch (x) {
+    console.error(label, x);
+    if (el) { const n = document.createElement('div'); n.className = 'mapfail'; n.textContent = 'Map could not draw: ' + (x.message || x); el.appendChild(n); }
+    return null;
+  }
+}
 
 // ---------- router ----------
 function route() { const h = location.hash.replace(/^#\/?/, '') || 'catflap'; const [name, arg] = h.split('/'); return { name, arg }; }
@@ -155,26 +167,24 @@ function MeowMap() {
     <div class="mapwrap"><div id="map" style="position:absolute;inset:0"></div><div class="near" id="near"><div class="label">Near you</div><div class="sub">Finding your position…</div></div></div>
   </div>
   <a class="fab" href="#/camera">${I.plus}Spotted one</a>${nav('map')}`;
-  const m = makeMap(document.getElementById('map'));
+  const mapEl = document.getElementById('map');
+  const m = guardMap(mapEl, 'meow map', () => makeMap(mapEl));
   const pins = [];
   for (const e of S.sums) {
     const p = L.lastPosition(e); if (!p) continue;
     const unnamed = !e.cat.name;
     const label = unnamed ? (L.startOfDay(e.first) === L.startOfDay(Date.now()) ? 'New today' : 'Unnamed') : `${L.displayName(e.cat)} · ${e.count}`;
     const html = `<div class="pin ${unnamed ? 'unnamed' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)};${unnamed ? 'font-size:20px' : ''}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
-    const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(html) }).addTo(m);
-    mk.on('click', () => go('cat/' + e.cat.id));
-    pins.push([p.lat, p.lng]);
+    if (m) guardMap(null, 'pin ' + e.cat.id, () => { const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(html) }).addTo(m); mk.on('click', () => go('cat/' + e.cat.id)); pins.push([p.lat, p.lng]); });
   }
   const fallback = lastKnownPlace();
-  if (fallback) m.setView([fallback.lat, fallback.lng], 16); else m.setView([54.5, -3], 5);
+  if (m) guardMap(mapEl, 'meow map view', () => { if (fallback) m.setView([fallback.lat, fallback.lng], 16); else m.setView([54.5, -3], 5); });
   getPos().then(pos => {
     if (!document.getElementById('map')) return;
     const sub = document.getElementById('mapsub');
     const near = document.getElementById('near');
     if (pos) {
-      window.L.marker([pos.lat, pos.lng], { icon: divIcon('<div class="youdot"></div>'), interactive: false }).addTo(m);
-      m.setView([pos.lat, pos.lng], 16);
+      if (m) guardMap(null, 'you dot', () => { window.L.marker([pos.lat, pos.lng], { icon: divIcon('<div class="youdot"></div>'), interactive: false }).addTo(m); m.setView([pos.lat, pos.lng], 16); });
       sub.textContent = sub.textContent.replace('finding you…', 'centred on you');
       const list = L.nearest(S.sums.filter(e => e.count), pos).slice(0, 2);
       near.innerHTML = '<div class="label">Near you</div>' + (list.length ? list.map(e => `<a class="row" href="#/cat/${esc(e.cat.id)}"><span><span class="dot" style="background:${swatch(e.cat)}"></span>${esc(L.displayName(e.cat))}</span><span>${L.distWord(e.distance)} · last seen ${L.dayWord(e.last, Date.now())}</span></a>`).join('') : '<div class="sub">No cats logged yet.</div>');
@@ -254,11 +264,12 @@ function Pawparazzi() {
 function Repurrt() {
   if (!S.draft) { S.draft = newDraft(); getPos().then(p => { if (S.draft && S.draft.source === 'none' && p) { S.draft.lat = p.lat; S.draft.lng = p.lng; S.draft.source = 'phone'; if (route().name === 'repurrt') render(); } }); }
   const d = S.draft;
-  const hasPin = typeof d.lat === 'number';
-  const pinAt = hasPin ? { lat: d.lat, lng: d.lng } : lastKnownPlace();
+  const pinAt = L.cleanPlace(d.lat, d.lng) || lastKnownPlace();
   const capText = { exif: 'From the photo · drag to fix', phone: 'Where you are now · drag to fix', manual: 'Placed by hand · drag to fix', none: 'No location yet · drag the pin to where it was' }[d.source];
   const named = S.sums.filter(e => e.count || e.cat);
-  const near = pinAt ? L.nearest(named, pinAt) : named.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
+  const byRecent = list => list.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
+  const nearPinned = pinAt ? L.nearest(named, pinAt) : [];
+  const near = [...nearPinned, ...byRecent(named.filter(e => !nearPinned.some(x => x.cat.id === e.cat.id)))];
   const close = near.filter(e => e.distance <= 250);
   const shown = S.showAllChips ? near : close;
   if (d.catId && d.catId !== 'new' && !shown.some(e => e.cat.id === d.catId)) { const sel = near.find(e => e.cat.id === d.catId); if (sel) shown.unshift(sel); }
@@ -290,12 +301,15 @@ function Repurrt() {
     <div class="savebar"><button class="primary" id="save" ${d.catId ? '' : 'disabled'}>${esc(saveLabel)}</button><div class="note" id="savenote">Saves to both phones · ${esc(summary)}</div><div class="err" id="saveerr" hidden></div></div>`;
 
   document.getElementById('back').onclick = () => { S.draft = null; S.showAllChips = false; history.length > 1 ? history.back() : go('catflap'); };
-  const m = makeMap(document.getElementById('wmap'), { attributionControl: false });
-  const at = pinAt || { lat: 54.5, lng: -3 };
-  m.setView([at.lat, at.lng], pinAt ? 17 : 5);
-  const mk = window.L.marker([at.lat, at.lng], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
-  mk.on('dragend', () => { const p = mk.getLatLng(); d.lat = p.lat; d.lng = p.lng; d.source = 'manual'; render(); });
-  m.on('click', ev => { d.lat = ev.latlng.lat; d.lng = ev.latlng.lng; d.source = 'manual'; render(); });
+  const wEl = document.getElementById('wmap');
+  guardMap(wEl, 'repurrt map', () => {
+    const m = makeMap(wEl, { attributionControl: false });
+    const at = pinAt || { lat: 54.5, lng: -3 };
+    m.setView([at.lat, at.lng], pinAt ? 17 : 5);
+    const mk = window.L.marker([at.lat, at.lng], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
+    mk.on('dragend', () => { const p = mk.getLatLng(); d.lat = p.lat; d.lng = p.lng; d.source = 'manual'; render(); });
+    m.on('click', ev => { d.lat = ev.latlng.lat; d.lng = ev.latlng.lng; d.source = 'manual'; render(); });
+  });
 
   const keep = () => { const n = document.getElementById('catname'); if (n) d.name = n.value; const t = document.getElementById('note'); if (t) d.note = t.value; };
   for (const b of $app.querySelectorAll('[data-cat]')) b.onclick = () => { keep(); d.catId = b.dataset.cat; d.name = d.catId === 'new' ? '' : (S.byId.get(d.catId)?.cat.name || ''); render(); };
@@ -313,7 +327,7 @@ function Repurrt() {
   document.getElementById('save').onclick = async () => {
     keep();
     const er = document.getElementById('saveerr'); er.hidden = true;
-    if (typeof d.lat !== 'number') { er.textContent = 'Drag the pin to where you saw it, then save.'; er.hidden = false; return; }
+    if (!L.cleanPlace(d.lat, d.lng)) { er.textContent = 'Drag the pin to where you saw it, then save.'; er.hidden = false; return; }
     const btn = document.getElementById('save'); btn.disabled = true; btn.textContent = 'Saving…';
     try { const catId = await saveDraft(d); S.draft = null; S.showAllChips = false; S.toast = `Saved to both phones · ${summary}`; go('cat/' + catId); }
     catch (x) { console.error(x); btn.disabled = false; btn.textContent = saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
@@ -337,7 +351,9 @@ async function saveDraft(d) {
     await S.store.put('photos', photoId, { data: d.photo.data, w: d.photo.w, h: d.photo.h, catId, at: d.at, createdAt: now });
     await S.store.patch('cats', catId, { thumbPhotoId: photoId });
   }
-  await S.store.put('sightings', newId(), { catId, at: d.at, lat: d.lat, lng: d.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
+  const place = L.cleanPlace(d.lat, d.lng);
+  if (!place) throw new Error('no location to save');
+  await S.store.put('sightings', newId(), { catId, at: d.at, lat: place.lat, lng: place.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
   return catId;
 }
 
@@ -360,11 +376,11 @@ function Meowmeries() {
   const logged = new Set(S.data.sightings.map(s => s.sourceKey).filter(Boolean));
   for (const it of M.items) it.dup = logged.has(it.key);
   const live = M.items.filter(it => it.include && !it.dup);
-  const ready = live.filter(it => it.catId && typeof it.lat === 'number');
+  const ready = live.filter(it => it.catId && L.cleanPlace(it.lat, it.lng));
   const waiting = live.length - ready.length;
   const newLabel = id => (M.newCats[id].name.trim() || 'New cat ' + id.split(':')[1]);
   const options = it => {
-    const base = typeof it.lat === 'number' ? L.nearest(S.sums, { lat: it.lat, lng: it.lng }) : S.sums.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
+    const base = L.cleanPlace(it.lat, it.lng) ? L.nearest(S.sums, { lat: it.lat, lng: it.lng }) : S.sums.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
     const seen = new Set(base.map(e => e.cat.id));
     const rest = S.sums.filter(e => !seen.has(e.cat.id));
     return `<option value="">Which cat?</option>
@@ -373,7 +389,7 @@ function Meowmeries() {
       <option value="+new">+ New cat</option>`;
   };
   const card = (it, i) => {
-    const placed = typeof it.lat === 'number';
+    const placed = !!L.cleanPlace(it.lat, it.lng);
     const isNew = it.catId.startsWith('new:');
     const status = it.dup ? 'Already logged, skipped' : !it.include ? 'Skipped' : placed ? (it.source === 'exif' ? 'Placed from the photo' : 'Placed by hand') : 'No location in this photo';
     return `<div class="memcard ${!it.include || it.dup ? 'off' : ''}">
@@ -424,14 +440,17 @@ function Meowmeries() {
   for (const b of $app.querySelectorAll('[data-placedone]')) b.onclick = () => { M.placing = null; render(); };
   if (M.placing !== null && document.getElementById('pmap')) {
     const it = M.items[M.placing];
-    const start = typeof it.lat === 'number' ? it : (S.pos || lastKnownPlace());
-    const m = makeMap(document.getElementById('pmap'), { attributionControl: false });
+    const start = L.cleanPlace(it.lat, it.lng) || S.pos || lastKnownPlace();
+    const pEl = document.getElementById('pmap');
+    guardMap(pEl, 'meowmeries map', () => {
+    const m = makeMap(pEl, { attributionControl: false });
     m.setView(start ? [start.lat, start.lng] : [54.5, -3], start ? 17 : 5);
     const set = ll => { it.lat = ll.lat; it.lng = ll.lng; it.source = 'manual'; mk.setLatLng(ll); };
     const mk = window.L.marker(start ? [start.lat, start.lng] : [54.5, -3], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
     mk.on('dragend', () => set(mk.getLatLng()));
     m.on('click', ev => set(ev.latlng));
     if (!start) getPos().then(p => { if (p && M.placing !== null) m.setView([p.lat, p.lng], 17); });
+    });
   }
   const sv = document.getElementById('memsave');
   if (sv) sv.onclick = async () => {
@@ -450,7 +469,8 @@ function Meowmeries() {
         await S.store.put('photos', photoId, { data: it.photo.data, w: it.photo.w, h: it.photo.h, catId, at: it.at, createdAt: Date.now() });
         const cat = S.byId.get(catId);
         if (!cat || !cat.cat.thumbPhotoId || (cat.last !== null && it.at >= cat.last)) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
-        await S.store.put('sightings', newId(), { catId, at: it.at, lat: it.lat, lng: it.lng, locationSource: it.source, seenBy: M.who, insideOutside: 'outside', petted: false, note: '', photoId, sourceKey: it.key, createdAt: Date.now(), createdBy: S.me || M.who });
+        const place = L.cleanPlace(it.lat, it.lng);
+        await S.store.put('sightings', newId(), { catId, at: it.at, lat: place.lat, lng: place.lng, locationSource: it.source, seenBy: M.who, insideOutside: 'outside', petted: false, note: '', photoId, sourceKey: it.key, createdAt: Date.now(), createdBy: S.me || M.who });
         it.include = false; it.saved = true;
       }
       S.mem = null; S.toast = `Logged ${ready.length} old sighting${ready.length === 1 ? '' : 's'} · saved to both phones`; go('catalogue');
@@ -513,17 +533,28 @@ function CatEntry(id) {
       ${e.sightings.map(s => `<div class="srow"><div style="display:flex;flex-direction:column;gap:2px;min-width:0"><div class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</div>
         <div class="d">${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}</div></div><span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span></div>`).join('') || '<div class="empty">No sightings yet.</div>'}
     </div></div></div>${nav('catalogue')}`;
-  if (terr.pins) {
-    const m = makeMap(document.getElementById('tmap'), { dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false, attributionControl: false });
-    const pts = e.sightings.filter(s => typeof s.lat === 'number').map(s => [s.lat, s.lng]);
-    for (const p of pts) window.L.marker(p, { icon: divIcon(`<div class="minipin" style="background:${swatch(c)}"></div>`), interactive: false }).addTo(m);
-    if (pts.length > 1) { window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m); m.fitBounds(pts, { padding: [24, 24], maxZoom: 18 }); }
-    else m.setView(pts[0], 17);
-  } else document.getElementById('tmap').remove();
-  document.getElementById('fav').onclick = () => S.store.patch('cats', id, { favourite: !c.favourite });
+  // Buttons are wired FIRST, so nothing the territory map does can leave them dead (live bug 2026-10-03).
+  document.getElementById('fav').onclick = () => saveCat(id, { favourite: !c.favourite }, c.favourite ? 'Removed from favourites' : 'Added to favourites');
   const p = document.getElementById('pencil'); if (p) p.onclick = () => { S.renaming = id; render(); const i = document.getElementById('rnin'); i.focus(); i.select(); };
   const rn = document.getElementById('rn');
-  if (rn) rn.onsubmit = async ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) await S.store.patch('cats', id, { name: v }); else render(); };
+  if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : 'Name cleared'); else render(); };
+  // Territory map: only pins with real numbers for both lat and lng, and a failure shows on the map instead of breaking the page.
+  const pts = e.sightings.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng)).map(s => [s.lat, s.lng]);
+  const tmap = document.getElementById('tmap');
+  if (!pts.length) { tmap.remove(); return; }
+  guardMap(tmap, 'territory map', () => {
+    const m = makeMap(tmap, { dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false, attributionControl: false });
+    if (pts.length > 1) m.fitBounds(pts, { padding: [24, 24], maxZoom: 18 }); else m.setView(pts[0], 17);
+    for (const q of pts) window.L.marker(q, { icon: divIcon(`<div class="minipin" style="background:${swatch(c)}"></div>`), interactive: false }).addTo(m);
+    if (pts.length > 1 && terr.centre && Number.isFinite(terr.centre.lng)) window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m);
+  });
+}
+
+// Save a change to a cat and say what happened, including a refusal, instead of failing silently.
+async function saveCat(id, patch, okMsg) {
+  try { await S.store.patch('cats', id, patch); S.toast = okMsg; }
+  catch (x) { console.error('saveCat', x); S.toast = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; }
+  if (route().name === 'cat') render();
 }
 
 // ---------- 7. MEOWMENTUM ----------
@@ -612,4 +643,12 @@ async function boot() {
 }
 
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js').catch(() => { });
+// Any error nobody caught shows as a strip at the top, so a phone can tell us what broke.
+function showCrash(msg) {
+  let n = document.getElementById('crash');
+  if (!n) { n = document.createElement('div'); n.id = 'crash'; n.className = 'crash'; n.onclick = () => n.remove(); document.body.appendChild(n); }
+  n.textContent = 'Something broke: ' + msg + ' (tap to hide)';
+}
+window.addEventListener('error', e => showCrash(e.message || 'unknown error'));
+window.addEventListener('unhandledrejection', e => showCrash((e.reason && (e.reason.code || e.reason.message)) || String(e.reason)));
 boot();

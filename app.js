@@ -201,7 +201,7 @@ function Catflap() {
     const fc = L.furcast(S.sums, pos, Date.now());
     if (fc.total < 3) { body.innerHTML = 'Log a few more cats and Furcast starts guessing who you might see.'; return; }
     const line = !pos ? 'Allow location to see which cat is likeliest near you right now.'
-      : fc.pick ? `Good odds of <b>${esc(L.displayName(fc.pick.cat))}</b> right now: ${fc.pick.nearAndTime ? `${fc.pick.nearAndTime} of ${fc.pick.total} sightings were within 150 m of here between ${fc.window}` : `${fc.pick.near} of ${fc.pick.total} sightings were within 150 m of here`}.`
+      : fc.pick ? `Good odds of <b>${esc(L.displayName(fc.pick.cat))}</b> right now: ${[fc.pick.homeNear ? 'you are near its home' : '', fc.pick.nearAndTime ? `${fc.pick.nearAndTime} of ${fc.pick.total} sightings were within 150 m of here between ${fc.window}` : fc.pick.near ? `${fc.pick.near} of ${fc.pick.total} sightings were within 150 m of here` : ''].filter(Boolean).join(', and ')}.`
       : 'No cats logged within 150 m of here yet. Somewhere new?';
     body.innerHTML = `<div class="fline">${line}</div><div class="fslots"><div><b>${fc.slots.morning || '-'}</b><small>best morning</small></div><div><b>${fc.slots.evening || '-'}</b><small>best evening</small></div><div><b>${fc.slots.busiest || '-'}</b><small>busiest day</small></div></div>`;
   };
@@ -227,7 +227,9 @@ function MeowMap() {
     const p = L.lastPosition(e); if (!p) continue;
     const unnamed = L.isUnnamed(e.cat);
     const label = `${L.displayName(e.cat)} · ${e.count}`;
-    const html = `<div class="pin ${unnamed ? 'unnamed' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
+    const hm = L.homeOf(e);
+    if (m && hm) guardMap(null, 'home ' + e.cat.id, () => window.L.marker([hm.lat, hm.lng], { icon: divIcon(`<div class="homepin" style="background:${swatch(e.cat)}" title="${esc(L.displayName(e.cat))}'s home">🏠</div>`) }).addTo(m).on('click', () => go('cat/' + e.cat.id)));
+    const html = `<div class="pin ${unnamed ? 'unnamed' : ''} ${L.whiteRing(e.cat) ? 'ring' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
     if (m) guardMap(null, 'pin ' + e.cat.id, () => { const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(html) }).addTo(m); mk.on('click', () => go('cat/' + e.cat.id)); pins.push([p.lat, p.lng]); });
   }
   const fallback = lastKnownPlace();
@@ -270,7 +272,7 @@ async function draftFromFile(file) {
   return newDraft({ photo, lat: pos?.lat, lng: pos?.lng, source: pos ? 'phone' : 'none', at: at || Date.now(), noGpsInPhoto: true });
 }
 function newDraft(o = {}) {
-  return { photo: null, lat: undefined, lng: undefined, source: 'none', at: Date.now(), catId: null, seenBy: S.me || 'beth', inside: false, petted: false, name: '', coat: '', note: '', ...o };
+  return { photo: null, lat: undefined, lng: undefined, source: 'none', at: Date.now(), catId: null, seenBy: S.me || 'beth', inside: false, petted: false, livesHere: false, name: '', coats: [], longHaired: false, note: '', ...o };
 }
 
 function Pawparazzi() {
@@ -333,7 +335,7 @@ function Repurrt() {
   const sel = d.catId && d.catId !== 'new' ? S.byId.get(d.catId) : null;
   const saveLabel = d.catId === 'new' ? (d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`) : sel ? `Save sighting of ${L.displayName(sel.cat)}` : 'Pick a cat first';
   const summary = `${d.inside ? 'inside' : 'outside'}, ${d.petted ? 'petted' : 'not petted'} · ${L.longStamp(d.at)}`;
-  const COATS = ['Ginger', 'Black', 'Tux', 'Grey', 'Tabby', 'White', 'Calico', 'Fluffy'];
+  const COATS = L.COAT_LIST;
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="formhead"><button class="back" id="back">${I.back}Back</button><div style="font-size:18px;font-weight:700">REPURRT</div><div style="width:50px"></div></div>
     <div class="pad stack" style="gap:12px;padding-bottom:16px">
@@ -348,7 +350,8 @@ function Repurrt() {
       <div class="stack8"><div class="label">Who saw it</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-who="${p}" class="${d.seenBy === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>
       ${d.catId ? `<div class="stack8"><label class="label" for="catname">${d.catId === 'new' ? 'Name (leave blank if you don\'t know yet)' : 'Name (change it to rename)'}</label>
         <input id="catname" class="field" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="${d.catId === 'new' ? 'e.g. Mittens' : ''}"></div>` : ''}
-      ${d.catId === 'new' ? `<div class="stack8"><div class="label">Looks like</div><div class="coats">${COATS.map(c => `<button data-coat="${c}" class="${d.coat === c ? 'on' : ''}">${c}</button>`).join('')}</div></div>` : ''}
+      ${d.catId === 'new' ? `<div class="stack8"><div class="label">Looks like (tick all that fit)</div><div class="coats">${COATS.map(c => `<button data-coat="${c}" class="${d.coats.includes(c) ? 'on' : ''}">${c}</button>`).join('')}<button data-long class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div>${d.coats.length || d.longHaired ? `<div class="sub">Saves as: ${esc(L.coatText(d.coats, d.longHaired))}</div>` : ''}</div>` : ''}
+      <div class="stack8"><div class="label">This place is</div><div class="seg small"><button data-lives="0" class="${!d.livesHere ? 'on' : ''}">Seen here</button><button data-lives="1" class="${d.livesHere ? 'on' : ''}">🏠 Lives here</button></div></div>
       <div class="pair"><div class="stack8"><div class="label">Where was it</div><div class="seg small"><button data-in="1" class="${d.inside ? 'on' : ''}">Inside</button><button data-in="0" class="${!d.inside ? 'on' : ''}">Outside</button></div></div>
         <div class="stack8"><div class="label">Purrometer: petted?</div><div class="seg small"><button data-pet="1" class="${d.petted ? 'on warm' : ''}">Yes</button><button data-pet="0" class="${!d.petted ? 'on' : ''}">No</button></div></div></div>
       <div class="stack8"><label class="label" for="note">Note</label><textarea id="note" class="field" placeholder="optional, e.g. under the yellow van">${esc(d.note)}</textarea></div>
@@ -373,7 +376,9 @@ function Repurrt() {
   for (const b of $app.querySelectorAll('[data-who]')) b.onclick = () => { keep(); d.seenBy = b.dataset.who; render(); };
   for (const b of $app.querySelectorAll('[data-in]')) b.onclick = () => { keep(); d.inside = b.dataset.in === '1'; render(); };
   for (const b of $app.querySelectorAll('[data-pet]')) b.onclick = () => { keep(); d.petted = b.dataset.pet === '1'; render(); };
-  for (const b of $app.querySelectorAll('[data-coat]')) b.onclick = () => { keep(); d.coat = d.coat === b.dataset.coat ? '' : b.dataset.coat; render(); };
+  for (const b of $app.querySelectorAll('[data-coat]')) b.onclick = () => { keep(); const k = b.dataset.coat; d.coats = d.coats.includes(k) ? d.coats.filter(x => x !== k) : [...d.coats, k]; render(); };
+  for (const b of $app.querySelectorAll('[data-long]')) b.onclick = () => { keep(); d.longHaired = !d.longHaired; render(); };
+  for (const b of $app.querySelectorAll('[data-lives]')) b.onclick = () => { keep(); d.livesHere = b.dataset.lives === '1'; render(); };
   const nm = document.getElementById('catname'); if (nm) nm.oninput = () => { d.name = nm.value; const s = document.getElementById('save'); if (d.catId === 'new') s.textContent = d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`; };
   const ap = document.getElementById('addphoto'); if (ap) ap.onchange = async e => {
     const f = e.target.files && e.target.files[0]; if (!f) return; keep();
@@ -410,7 +415,7 @@ async function saveDraft(d) {
   const name = d.name.trim();
   if (catId === 'new') {
     catId = newId(); newCat = true;
-    await S.store.put('cats', catId, newCatDoc(catId, name, d.coat));
+    await S.store.put('cats', catId, newCatDoc(catId, name, d.coats, d.longHaired));
   } else {
     const cat = S.byId.get(catId)?.cat;
     if (cat && name && name !== (cat.name || '')) await S.store.patch('cats', catId, { name });
@@ -424,8 +429,9 @@ async function saveDraft(d) {
   if (photoId && (d.photo || !photoOk(S.byId.get(catId)?.cat.thumbPhotoId))) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
   const place = L.cleanPlace(d.lat, d.lng);
   if (!place) throw new Error('no location to save');
-  await S.store.put('sightings', newId(), { catId, at: d.at, lat: place.lat, lng: place.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
+  await S.store.put('sightings', newId(), { catId, at: d.at, lat: place.lat, lng: place.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, livesHere: !!d.livesHere, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
   d.savedPhotoId = photoId;
+  if (d.livesHere) fillHome(catId, place);
   celebrate(before, { cats: newCat ? 1 : 0, sightings: 1 });
   return catId;
 }
@@ -574,7 +580,7 @@ function Meowmeries() {
         for (const raw of [...new Set(it.cats)]) {
           let catId = raw;
           if (raw.startsWith('new:')) {
-            if (!made[raw]) { made[raw] = newId(); const doc = newCatDoc(made[raw], M.newCats[raw].name, ''); await S.store.put('cats', made[raw], doc); }
+            if (!made[raw]) { made[raw] = newId(); const doc = newCatDoc(made[raw], M.newCats[raw].name, [], false); await S.store.put('cats', made[raw], doc); }
             catId = made[raw];
           }
           if (!photoSaved) { await S.store.put('photos', photoId, { data: it.photo.data, w: it.photo.w, h: it.photo.h, catId, at: it.at, createdAt: Date.now() }); photoSaved = true; }
@@ -635,22 +641,23 @@ function CatEntry(id) {
   const c = e.cat, now = Date.now();
   const days = e.first !== null ? Math.max(0, Math.floor((L.startOfDay(now) - L.startOfDay(e.first)) / L.DAY)) : 0;
   const terr = L.territory(e);
-  const desc = [c.coat, c.markings, c.collar ? (c.collarColour ? c.collarColour + ' collar' : 'collar') : '', c.friendliness, c.homeNote].filter(Boolean).join(' · ');
+  const home = L.homeOf(e);
+  const desc = [L.coatText(L.coatsOf(c), L.isLongHaired(c)) || c.coat, c.markings, c.collar ? (c.collarColour ? c.collarColour + ' collar' : 'collar') : '', c.friendliness, home ? '' : c.homeNote].filter(Boolean).join(' · ');
   const nameBlock = S.renaming === id
     ? `<form class="rename" id="rn"><input id="rnin" class="field" value="${esc(c.name || '')}" placeholder="Name this cat" aria-label="New name"><button type="submit">Save</button></form>`
     : `<div class="nameline"><div class="nm">${esc(L.displayName(c))}</div><button class="pencil" id="pencil" aria-label="Rename this cat">${I.pencil}</button></div>
        <div class="desc">${esc(desc || (c.name ? 'tap the pencil to rename' : 'tap the pencil to name'))}</div>
        <button class="editbtn" id="editdetails">Edit details</button>`;
-  const COATS = ['Ginger', 'Black', 'Tux', 'Grey', 'Tabby', 'White', 'Calico', 'Fluffy'];
+  const COATS = L.COAT_LIST;
   const FRIENDLY = ['runs off', 'watches', 'comes over', 'lap cat'];
-  const ed = S.editing === id ? (S.editDraft || (S.editDraft = { coat: c.coat || '', markings: c.markings || '', collar: !!c.collar, collarColour: c.collarColour || '', friendliness: c.friendliness || '', homeNote: c.homeNote || '', notes: c.notes || '' })) : null;
+  const ed = S.editing === id ? (S.editDraft || (S.editDraft = { coats: [...L.coatsOf(c)], longHaired: L.isLongHaired(c), markings: c.markings || '', collar: !!c.collar, collarColour: c.collarColour || '', friendliness: c.friendliness || '', homeNote: c.homeNote || '', notes: c.notes || '' })) : null;
   const editForm = ed ? `<div class="pad stack" style="gap:12px;padding-top:16px"><div class="label">Edit details</div>
-      <div class="stack8"><div class="label">Coat</div><div class="coats">${COATS.map(k => `<button data-ecoat="${k}" class="${ed.coat === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+      <div class="stack8"><div class="label">Coat (tick all that fit)</div><div class="coats">${COATS.map(k => `<button data-ecoat="${k}" class="${ed.coats.includes(k) ? 'on' : ''}">${k}</button>`).join('')}<button data-elong class="tick ${ed.longHaired ? 'on' : ''}">${ed.longHaired ? '✓ ' : ''}Long-haired</button></div>${ed.coats.length || ed.longHaired ? `<div class="sub">Saves as: ${esc(L.coatText(ed.coats, ed.longHaired))}</div>` : ''}</div>
       <div class="stack8"><label class="label" for="emark">Markings</label><input id="emark" class="field" value="${esc(ed.markings)}" placeholder="e.g. white bib, one white sock"></div>
       <div class="stack8"><div class="label">Collar</div><div class="seg small"><button data-ecollar="0" class="${!ed.collar ? 'on' : ''}">None</button><button data-ecollar="1" class="${ed.collar ? 'on' : ''}">Yes</button></div>
         ${ed.collar ? `<input id="ecolour" class="field" value="${esc(ed.collarColour)}" placeholder="Colour, e.g. red with a bell">` : ''}</div>
       <div class="stack8"><div class="label">Friendliness</div><div class="seg small wrap4">${FRIENDLY.map(k => `<button data-efriend="${k}" class="${ed.friendliness === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
-      <div class="stack8"><label class="label" for="ehome">Home</label><input id="ehome" class="field" value="${esc(ed.homeNote)}" placeholder="e.g. number 27, goes in the catflap"></div>
+      <div class="stack8"><label class="label" for="ehome">Home</label>${home ? `<div class="sub">🏠 Home pin set from the ${esc(L.longStamp(home.at))} sighting</div>` : ''}<input id="ehome" class="field" value="${esc(ed.homeNote)}" placeholder="e.g. number 27, goes in the catflap"></div>
       <div class="stack8"><label class="label" for="enotes">Notes</label><textarea id="enotes" class="field" placeholder="anything else">${esc(ed.notes)}</textarea></div>
       <button class="primary" id="esave">Save details</button><button class="ghost" id="ecancel">Cancel</button></div>` : '';
   const others = S.sums.filter(x => x.cat.id !== id).sort((a, b) => (b.last || 0) - (a.last || 0));
@@ -661,13 +668,14 @@ function CatEntry(id) {
     return `<div class="srow2"><button class="srowbtn" data-row="${esc(s.id)}" aria-expanded="${open}">
         ${hasPhoto ? `<span class="sthumb" data-photo="${esc(s.photoId)}"></span>` : ''}
         <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;text-align:left"><span class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</span>
-        <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
+        <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.livesHere ? ' · 🏠 lives here' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
         <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span><span class="more" aria-hidden="true">⋯</span></button>
       ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
         : `<div class="acts">
           ${!L.hasPin(s) ? `<button class="ghost" data-placesight="${esc(s.id)}">📍 Place it on the map</button>` : ''}
           ${hasPhoto ? `<button class="ghost" data-another="${esc(s.id)}">+ Another cat in this photo</button>` : ''}
+          <button class="ghost" data-lives="${esc(s.id)}">${s.livesHere ? '🏠 Not its home: mark as Seen here' : '🏠 Lives here: set as its home'}</button>
           <button class="ghost" data-wrong="${esc(s.id)}">Wrong cat: move it</button>
           <button class="ghost danger" data-delsight="${esc(s.id)}">Delete this sighting</button>
           ${hasPhoto ? `<button class="ghost danger" data-delphoto="${esc(s.id)}">Delete just the photo</button>` : ''}</div>`) : ''}</div>`;
@@ -682,7 +690,7 @@ function CatEntry(id) {
       <a class="round lt" style="left:20px" href="#/catalogue" aria-label="Back to Catalogue">${I.back}</a>
       <button class="round lt" style="right:20px" id="fav" aria-label="${c.favourite ? 'Remove from favourites' : 'Add to favourites'}">${I.heart(c.favourite).replace('#B8BCC4', '#17181C')}</button>
       ${nameBlock}</div>
-    ${editForm}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
+    ${editForm}${!ed && home ? `<div class="pad"><div class="homeline">🏠 Home: ${esc(c.homeNote || 'pinned on the map')}</div></div>` : ''}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
@@ -696,12 +704,13 @@ function CatEntry(id) {
   const eb = document.getElementById('editdetails'); if (eb) eb.onclick = () => { S.editing = id; S.editDraft = null; render(); };
   if (ed) {
     const keepEd = () => { for (const [f, k] of [['emark', 'markings'], ['ecolour', 'collarColour'], ['ehome', 'homeNote'], ['enotes', 'notes']]) { const el = document.getElementById(f); if (el) ed[k] = el.value; } };
-    for (const b of $app.querySelectorAll('[data-ecoat]')) b.onclick = () => { keepEd(); ed.coat = ed.coat === b.dataset.ecoat ? '' : b.dataset.ecoat; render(); };
+    for (const b of $app.querySelectorAll('[data-ecoat]')) b.onclick = () => { keepEd(); const k = b.dataset.ecoat; ed.coats = ed.coats.includes(k) ? ed.coats.filter(x => x !== k) : [...ed.coats, k]; render(); };
+    for (const b of $app.querySelectorAll('[data-elong]')) b.onclick = () => { keepEd(); ed.longHaired = !ed.longHaired; render(); };
     for (const b of $app.querySelectorAll('[data-ecollar]')) b.onclick = () => { keepEd(); ed.collar = b.dataset.ecollar === '1'; render(); };
     for (const b of $app.querySelectorAll('[data-efriend]')) b.onclick = () => { keepEd(); ed.friendliness = ed.friendliness === b.dataset.efriend ? '' : b.dataset.efriend; render(); };
     document.getElementById('ecancel').onclick = () => { S.editing = null; S.editDraft = null; render(); };
     document.getElementById('esave').onclick = () => { keepEd(); const d = S.editDraft; S.editing = null; S.editDraft = null;
-      saveCat(id, { coat: d.coat, swatch: L.swatchFor(d.coat, id), markings: d.markings.trim(), collar: d.collar, collarColour: d.collar ? d.collarColour.trim() : '', friendliness: d.friendliness, homeNote: d.homeNote.trim(), notes: d.notes.trim() }, 'Details saved'); };
+      saveCat(id, { coats: d.coats, longHaired: d.longHaired, coat: L.coatText(d.coats, d.longHaired), swatch: L.swatchFromCoats(d.coats, id, d.longHaired), markings: d.markings.trim(), collar: d.collar, collarColour: d.collar ? d.collarColour.trim() : '', friendliness: d.friendliness, homeNote: d.homeNote.trim(), notes: d.notes.trim() }, 'Details saved'); };
   }
   const rn = document.getElementById('rn');
   if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
@@ -714,6 +723,13 @@ function CatEntry(id) {
     S.rowOpen = null; go('repurrt');
   };
   for (const b of $app.querySelectorAll('[data-wrong]')) b.onclick = () => { S.moving = b.dataset.wrong; render(); };
+  for (const b of $app.querySelectorAll('[data-lives]')) b.onclick = () => act(async () => {
+    const s = sOf(b.dataset.lives), on = !s.livesHere;
+    if (on && !L.hasPin(s)) return 'Place it on the map first, then mark it as home';
+    await S.store.patch('sightings', s.id, { livesHere: on });
+    if (on) fillHome(id, s);
+    S.rowOpen = null; return on ? 'Set as home 🏠' : 'Marked as Seen here';
+  });
   for (const b of $app.querySelectorAll('[data-placesight]')) b.onclick = () => { S.placingSight = b.dataset.placesight; S.placeAt = null; render(); };
   const smap = document.getElementById('smap');
   if (smap) guardMap(smap, 'place sighting map', () => {
@@ -735,7 +751,7 @@ function CatEntry(id) {
   });
   for (const b of $app.querySelectorAll('[data-moveto]')) b.onclick = () => act(async () => {
     let to = b.dataset.moveto;
-    if (to === 'new') { to = newId(); await S.store.put('cats', to, newCatDoc(to, '', '')); }
+    if (to === 'new') { to = newId(); await S.store.put('cats', to, newCatDoc(to, '', [], false)); }
     const s = sOf(S.moving);
     await S.store.patch('sightings', s.id, { catId: to, movedFrom: id, movedAt: Date.now() });
     if (s.photoId && (S.byId.get(to)?.cat.thumbPhotoId == null)) await S.store.patch('cats', to, { thumbPhotoId: s.photoId });
@@ -762,13 +778,27 @@ function CatEntry(id) {
     const m = makeMap(tmap, { dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false, attributionControl: false });
     if (pts.length > 1) m.fitBounds(pts, { padding: [24, 24], maxZoom: 18 }); else m.setView(pts[0], 17);
     for (const q of pts) window.L.marker(q, { icon: divIcon(`<div class="minipin" style="background:${swatch(c)}"></div>`), interactive: false }).addTo(m);
+    if (home) window.L.marker([home.lat, home.lng], { icon: divIcon(`<div class="homepin" style="background:${swatch(c)}">🏠</div>`), interactive: false }).addTo(m);
     if (pts.length > 1 && terr.centre) window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m);
   });
 }
 
-function newCatDoc(id, name, coat) {
+// Lives here: when the cat's Home is still empty, fill it with the street from OpenStreetMap's free address lookup.
+// Sends only the home pin's coordinates; any failure leaves Home empty and the cat page says "pinned on the map".
+async function fillHome(catId, place) {
+  try {
+    const c = S.byId.get(catId)?.cat; if (c && c.homeNote) return;
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${place.lat}&lon=${place.lng}`, { headers: { 'Accept-Language': 'en-GB' } });
+    const a = (await r.json()).address || {};
+    const t = [a.house_number, a.road].filter(Boolean).join(' ') || a.suburb || '';
+    if (t) await S.store.patch('cats', catId, { homeNote: t });
+  } catch (x) { console.warn('fillHome', x); }
+}
+
+function newCatDoc(id, name, coats, longHaired) {
   const n = name.trim();
-  const doc = { name: n, coat: coat || '', swatch: L.swatchFor(coat, id), markings: '', homeNote: '', favourite: false, createdAt: Date.now(), createdBy: S.me || 'unknown', thumbPhotoId: null };
+  coats = coats || [];
+  const doc = { name: n, coats, longHaired: !!longHaired, coat: L.coatText(coats, longHaired), swatch: L.swatchFromCoats(coats, id, longHaired), markings: '', homeNote: '', favourite: false, createdAt: Date.now(), createdBy: S.me || 'unknown', thumbPhotoId: null };
   if (!n) { doc.num = S.nextNum; S.nextNum++; }
   return doc;
 }

@@ -21,11 +21,43 @@ const SWATCH = [
   [/tux/i, '#17181C'],
   [/black/i, '#17181C'],
   [/grey|gray|blue|silver/i, '#8A8F99'],
-  [/calico|tortie|tortoise/i, '#B5651D'],
-  [/tabby|brown/i, '#9A6B3F'],
-  [/white|cream/i, '#C9C5BA'],
+  [/calico/i, '#B5651D'],
+  [/tortie|tortoise/i, '#4A3426'],
+  [/siamese|point/i, '#CDBFA8'],
+  [/cream/i, '#E8D5B0'],
+  [/brown/i, '#7A5230'],
+  [/tabby/i, '#9A6B3F'],
+  [/white/i, '#E9E6DE'],
   [/fluff|long/i, '#E9A23B'],
 ];
+// Coat chips, multi-select (Beth 2026-10-03). Long-haired is a separate tick, not a colour.
+export const COAT_LIST = ['Ginger', 'Black', 'Tux', 'Grey', 'Tabby', 'White', 'Calico', 'Tortie', 'Cream', 'Brown', 'Siamese/pointed'];
+// The coats a cat has, reading the old single-coat field where there is no list yet ("Fluffy" became the long-haired tick).
+export function coatsOf(cat) {
+  if (cat && Array.isArray(cat.coats)) return cat.coats;
+  const c = cat && cat.coat;
+  return c && COAT_LIST.includes(c) ? [c] : [];
+}
+export function isLongHaired(cat) { return !!(cat && (cat.longHaired || cat.coat === 'Fluffy')); }
+// ["Ginger","White"] -> "Ginger and white"; three or more -> "Black, white and ginger".
+export function coatText(coats, longHaired) {
+  const w = coats.map((c, i) => i === 0 ? c : c.toLowerCase());
+  let t = w.length <= 1 ? (w[0] || '') : w.slice(0, -1).join(', ') + ' and ' + w[w.length - 1];
+  if (longHaired) t = t ? t + ', long-haired' : 'Long-haired';
+  return t;
+}
+// The pin takes the first colour that is not White; a white-only cat is white. White plus anything gets a white ring.
+export function swatchFromCoats(coats, id, longHaired) {
+  const main = coats.find(c => c !== 'White') || coats[0];
+  return main ? swatchFor(main, id) : longHaired ? swatchFor('long', id) : swatchFor('', id);
+}
+export function whiteRing(cat) { const c = coatsOf(cat); return c.includes('White') && c.some(x => x !== 'White'); }
+// A cat's home: its latest "Lives here" sighting that has a place. Latest wins.
+export function homeOf(summary) {
+  let h = null;
+  for (const s of summary.sightings) if (s.livesHere && hasPin(s) && (!h || s.at > h.at)) h = { lat: s.lat, lng: s.lng, at: s.at, sightingId: s.id };
+  return h;
+}
 const FALLBACK = ['#2F6B4F', '#E9A23B', '#D9641E', '#8A8F99', '#17181C', '#9A6B3F'];
 export function swatchFor(coat, id = '') {
   for (const [re, hex] of SWATCH) if (re.test(coat || '')) return hex;
@@ -223,8 +255,11 @@ export function furcast(summaries, pos, now) {
   for (const e of summaries) {
     const near = e.sightings.filter(s => hasPin(s) && metres(pos, s) <= 150);
     const nearAndTime = near.filter(s => circMin(minuteOfDay(s.at), nowMin) <= 90);
-    const score = nearAndTime.length * 3 + near.length;
-    if (score > 0 && (!pick || score > pick.score)) pick = { cat: e.cat, score, near: near.length, nearAndTime: nearAndTime.length, total: e.count };
+    // A cat whose home is within 150 m of here is the likeliest of all to turn up (Beth: "Furcast weights home").
+    const home = homeOf(e);
+    const homeNear = !!(home && metres(pos, home) <= 150);
+    const score = nearAndTime.length * 3 + near.length + (homeNear ? 6 : 0);
+    if (score > 0 && (!pick || score > pick.score)) pick = { cat: e.cat, score, near: near.length, nearAndTime: nearAndTime.length, total: e.count, homeNear };
   }
   return { slots, pick, window, total: all.length };
 }

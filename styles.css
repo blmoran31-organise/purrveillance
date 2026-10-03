@@ -287,3 +287,9 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .second { height: 52px; border-radius: 16px; border: 2px solid var(--moss); background: var(--moss-pale); color: var(--moss); font-size: 15px; font-weight: 600; width: 100%; }
 .second:disabled { opacity: 0.45; }
 .srowbtn .more { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 16px; background: var(--surface); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: var(--ink); }
+/* Multi-coat, long-haired tick, white ring, homes (Beth 2026-10-03) */
+.coats button.tick { border-style: dashed; }
+.coats button.tick.on { border-style: solid; background: var(--moss); border-color: var(--moss); color: #FFFFFF; }
+.pin.ring i { box-shadow: inset 0 0 0 4px #FFFFFF, 0 2px 8px rgba(0,0,0,0.25); }
+.homepin { width: 30px; height: 30px; border-radius: 8px; border: 2px solid #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; transform: translate(-50%, -50%); }
+.homeline { margin-top: 14px; background: var(--moss-pale); color: var(--moss); border-radius: 14px; padding: 10px 14px; font-size: 14px; font-weight: 600; }

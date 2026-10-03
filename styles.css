@@ -283,3 +283,7 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .seg.wrap4 { flex-wrap: wrap; }
 .seg.wrap4 button { flex: 1 1 40%; font-size: 13px; }
 .aboutnote { margin-top: 14px; background: var(--surface); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }
+/* Two cats in one photo, made obvious (Beth 2026-10-03): a real second button and a visible row menu */
+.second { height: 52px; border-radius: 16px; border: 2px solid var(--moss); background: var(--moss-pale); color: var(--moss); font-size: 15px; font-weight: 600; width: 100%; }
+.second:disabled { opacity: 0.45; }
+.srowbtn .more { flex: 0 0 auto; width: 32px; height: 32px; border-radius: 16px; background: var(--surface); display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: var(--ink); }

@@ -326,7 +326,7 @@ function Repurrt() {
   const nearPinned = pinAt ? L.nearest(named, pinAt) : [];
   const near = [...nearPinned, ...byRecent(named.filter(e => !nearPinned.some(x => x.cat.id === e.cat.id)))];
   const close = near.filter(e => e.distance <= 250);
-  const shown = (S.showAllChips ? near : close).filter(e => e.cat.id !== d.excludeCat);
+  const shown = (S.showAllChips ? near : close).filter(e => e.cat.id !== d.excludeCat && !(d.doneCats || []).includes(e.cat.id));
   if (d.catId && d.catId !== 'new' && !shown.some(e => e.cat.id === d.catId)) { const sel = near.find(e => e.cat.id === d.catId); if (sel) shown.unshift(sel); }
   const more = near.length - shown.length;
   const chip = e => `<button class="chip ${d.catId === e.cat.id ? 'on' : ''}" data-cat="${esc(e.cat.id)}"><div class="face" style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}></div><b>${esc(L.displayName(e.cat))}</b><small>${isFinite(e.distance) ? L.distWord(e.distance) : (e.last ? L.dayWord(e.last, Date.now()) : 'no pins')}</small></button>`;
@@ -353,7 +353,8 @@ function Repurrt() {
         <div class="stack8"><div class="label">Purrometer: petted?</div><div class="seg small"><button data-pet="1" class="${d.petted ? 'on warm' : ''}">Yes</button><button data-pet="0" class="${!d.petted ? 'on' : ''}">No</button></div></div></div>
       <div class="stack8"><label class="label" for="note">Note</label><textarea id="note" class="field" placeholder="optional, e.g. under the yellow van">${esc(d.note)}</textarea></div>
     </div></div>
-    <div class="savebar"><button class="primary" id="save" ${d.catId ? '' : 'disabled'}>${esc(saveLabel)}</button><div class="note" id="savenote">Saves to both phones · ${esc(summary)}</div><div class="err" id="saveerr" hidden></div></div>`;
+    <div class="savebar"><button class="primary" id="save" ${d.catId ? '' : 'disabled'}>${esc(saveLabel)}</button>
+      ${d.photo || d.photoId ? `<button class="second" id="saveanother" ${d.catId ? '' : 'disabled'}>📸 Save, then + Another cat in this photo</button>` : ''}<div class="note" id="savenote">Saves to both phones · ${esc(summary)}</div><div class="err" id="saveerr" hidden></div></div>`;
 
   document.getElementById('back').onclick = () => { S.draft = null; S.showAllChips = false; history.length > 1 ? history.back() : go('catflap'); };
   const wEl = document.getElementById('wmap');
@@ -379,14 +380,27 @@ function Repurrt() {
     try { const nd = await draftFromFile(f); d.photo = nd.photo; d.noGpsInPhoto = nd.noGpsInPhoto; if (nd.source === 'exif') { d.lat = nd.lat; d.lng = nd.lng; d.source = 'exif'; d.at = nd.at; } render(); }
     catch (x) { const er = document.getElementById('saveerr'); er.textContent = x.message; er.hidden = false; }
   };
-  document.getElementById('save').onclick = async () => {
+  // another=true saves, then reopens Repurrt on the SAME photo, time and place, so only the next cat is picked.
+  const doSave = async another => {
     keep();
     const er = document.getElementById('saveerr'); er.hidden = true;
     if (!L.cleanPlace(d.lat, d.lng)) { er.textContent = 'Drag the pin to where you saw it, then save.'; er.hidden = false; return; }
-    const btn = document.getElementById('save'); btn.disabled = true; btn.textContent = 'Saving…';
-    try { S.toast = `Saved to both phones · ${summary}`; const catId = await saveDraft(d); S.draft = null; S.showAllChips = false; go('cat/' + catId); }
-    catch (x) { console.error(x); S.toast = null; btn.disabled = false; btn.textContent = saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
+    const btn = document.getElementById(another ? 'saveanother' : 'save'); btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      S.toast = `Saved to both phones · ${summary}`;
+      const catId = await saveDraft(d); S.showAllChips = false;
+      if (another) {
+        const done = (d.doneCats || []).concat(catId);
+        S.draft = newDraft({ photoId: d.savedPhotoId, lat: d.lat, lng: d.lng, source: d.source, at: d.at, seenBy: d.seenBy, inside: d.inside, excludeCat: catId, doneCats: done });
+        const savedName = S.byId.get(catId) ? L.displayName(S.byId.get(catId).cat) : (d.name.trim() || 'the new cat');
+        S.toast = `Saved ${savedName} · now pick the next cat in the same photo`;
+        render();
+      } else { S.draft = null; go('cat/' + catId); }
+    }
+    catch (x) { console.error(x); S.toast = null; btn.disabled = false; btn.textContent = another ? '📸 Save, then + Another cat in this photo' : saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
   };
+  document.getElementById('save').onclick = () => doSave(false);
+  const sa = document.getElementById('saveanother'); if (sa) sa.onclick = () => doSave(true);
 }
 
 async function saveDraft(d) {
@@ -411,7 +425,7 @@ async function saveDraft(d) {
   const place = L.cleanPlace(d.lat, d.lng);
   if (!place) throw new Error('no location to save');
   await S.store.put('sightings', newId(), { catId, at: d.at, lat: place.lat, lng: place.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
-  d.savedMsg = null;
+  d.savedPhotoId = photoId;
   celebrate(before, { cats: newCat ? 1 : 0, sightings: 1 });
   return catId;
 }
@@ -474,7 +488,8 @@ function Meowmeries() {
           ${k === 0 ? `<button class="ghost" data-place="${i}">${placed ? 'Move pin' : 'Place it'}</button>` : `<button class="ghost" data-dropcat="${i}:${k}" aria-label="Remove this cat">✕</button>`}</div>`).join('')}
         ${newInputs.map(id => `<input class="field" data-newname="${esc(id)}" value="${esc(M.newCats[id].name)}" placeholder="Name ${esc('Cat ' + numFor(id))} (optional)" aria-label="Name for ${esc('Cat ' + numFor(id))}">`).join('')}
         ${M.placing === i ? `<div class="wheremap"><div id="pmap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="ghost" data-placedone="${i}">Done</button>` : ''}
-        <div class="memfoot"><button class="linkbtn" data-addcat="${i}">+ Another cat in this photo</button><button class="linkbtn" data-skip="${i}">Skip this photo</button></div>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
+        <button class="second" data-addcat="${i}">📸 + Another cat in this photo</button>
+        <div class="memfoot"><button class="linkbtn" data-skip="${i}">Skip this photo</button></div>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
     </div>`;
   };
   const newCount = order.length;
@@ -647,7 +662,7 @@ function CatEntry(id) {
         ${hasPhoto ? `<span class="sthumb" data-photo="${esc(s.photoId)}"></span>` : ''}
         <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;text-align:left"><span class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</span>
         <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
-        <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span></button>
+        <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span><span class="more" aria-hidden="true">⋯</span></button>
       ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
         : `<div class="acts">
@@ -671,7 +686,7 @@ function CatEntry(id) {
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
-    <div class="pad stack8" style="padding-top:16px"><div class="label">Sightings · tap one for options</div><div>
+    <div class="pad stack8" style="padding-top:16px"><div class="label">Sightings · tap ⋯ for options</div><div>
       ${e.sightings.map(row).join('') || '<div class="empty">No sightings yet.</div>'}</div></div>
     <div class="pad" style="padding-top:12px;padding-bottom:20px">${foot}</div></div>${nav('catalogue')}`;
 

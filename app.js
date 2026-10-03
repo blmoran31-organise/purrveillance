@@ -78,8 +78,15 @@ function photoAttrId(id) { return photoOk(id) ? ` data-photo="${esc(id)}"` : '';
 async function hydratePhotos(root = $app) {
   for (const el of root.querySelectorAll('[data-photo]')) {
     const id = el.dataset.photo; el.removeAttribute('data-photo');
-    try { const p = await S.store.photo(id); if (p && p.data && !p.deleted) { el.style.backgroundImage = `url("${p.data}")`; el.classList.add('hasphoto'); const t = el.querySelector('.ini'); if (t) t.textContent = ''; } } catch (e) { console.warn('photo', id, e); }
+    try { const p = await S.store.photo(id); if (p && p.data && !p.deleted) { el.style.backgroundImage = `url("${p.data}")`; cropStyle(el, p); el.classList.add('hasphoto'); const t = el.querySelector('.ini'); if (t) t.textContent = ''; } } catch (e) { console.warn('photo', id, e); }
   }
+}
+// Crops (Beth 2026-10-03): by default the whole photo shows, fitted, on the cat's colour, so a portrait never loses the
+// cat. Once someone taps the cat ("Tap the cat"), every crop of that photo fills the square, centred on that point.
+function cropStyle(el, p) {
+  el.style.backgroundRepeat = 'no-repeat';
+  if (Number.isFinite(p.fx) && Number.isFinite(p.fy)) { el.style.backgroundSize = 'cover'; el.style.backgroundPosition = `${p.fx}% ${p.fy}%`; }
+  else { el.style.backgroundSize = 'contain'; el.style.backgroundPosition = 'center'; }
 }
 function counts() { return { cats: S.data.cats.length, sightings: S.data.sightings.length }; }
 // After a save, a crossed milestone replaces the plain toast.
@@ -133,7 +140,7 @@ function render() {
   const r = route();
   killMaps();
   if (r.name !== 'camera') stopCamera();
-  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; }
+  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
   const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
@@ -666,14 +673,16 @@ function CatEntry(id) {
     const open = S.rowOpen === s.id;
     const hasPhoto = photoOk(s.photoId);
     return `<div class="srow2"><button class="srowbtn" data-row="${esc(s.id)}" aria-expanded="${open}">
-        ${hasPhoto ? `<span class="sthumb" data-photo="${esc(s.photoId)}"></span>` : ''}
+        ${hasPhoto ? `<span class="sthumb" style="background-color:${swatch(c)}" data-photo="${esc(s.photoId)}"></span>` : ''}
         <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;text-align:left"><span class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</span>
         <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.livesHere ? ' · 🏠 lives here' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
         <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span><span class="more" aria-hidden="true">⋯</span></button>
       ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
+        : S.focusing === s.id ? `<div class="acts"><div class="label">Tap the cat in the photo</div><div class="focusbox" id="focusbox"><img id="focusimg" alt="The full photo"><span class="focusdot" id="focusdot" hidden></span></div><div class="sub">Every square crop of this photo will centre on where you tap.</div><button class="ghost" data-cancel>Done</button></div>`
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
         : `<div class="acts">
           ${!L.hasPin(s) ? `<button class="ghost" data-placesight="${esc(s.id)}">📍 Place it on the map</button>` : ''}
+          ${hasPhoto ? `<button class="ghost" data-focus="${esc(s.id)}">🎯 Tap the cat (set the crop)</button>` : ''}
           ${hasPhoto ? `<button class="ghost" data-another="${esc(s.id)}">+ Another cat in this photo</button>` : ''}
           <button class="ghost" data-lives="${esc(s.id)}">${s.livesHere ? '🏠 Not its home: mark as Seen here' : '🏠 Lives here: set as its home'}</button>
           <button class="ghost" data-wrong="${esc(s.id)}">Wrong cat: move it</button>
@@ -716,7 +725,22 @@ function CatEntry(id) {
   if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
   const sOf = sid => e.sightings.find(x => x.id === sid);
   for (const b of $app.querySelectorAll('[data-row]')) b.onclick = () => { S.rowOpen = S.rowOpen === b.dataset.row ? null : b.dataset.row; S.moving = null; S.placingSight = null; render(); };
-  for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; render(); };
+  for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; S.focusing = null; render(); };
+  for (const b of $app.querySelectorAll('[data-focus]')) b.onclick = () => { S.focusing = b.dataset.focus; render(); };
+  const fimg = document.getElementById('focusimg');
+  if (fimg) {
+    const s = sOf(S.focusing), dot = document.getElementById('focusdot');
+    const showDot = (x, y) => { dot.style.left = x + '%'; dot.style.top = y + '%'; dot.hidden = false; };
+    S.store.photo(s.photoId).then(p => { if (!p) return; fimg.src = p.data; if (Number.isFinite(p.fx)) showDot(p.fx, p.fy); });
+    fimg.onclick = ev => act(async () => {
+      const r = fimg.getBoundingClientRect();
+      const fx = Math.round(Math.min(100, Math.max(0, (ev.clientX - r.left) / r.width * 100)));
+      const fy = Math.round(Math.min(100, Math.max(0, (ev.clientY - r.top) / r.height * 100)));
+      await S.store.patch('photos', s.photoId, { fx, fy, focusAt: Date.now(), focusBy: S.me || 'unknown' });
+      S.focusing = null; S.rowOpen = null;
+      return 'Got it: every crop of this photo now centres on the cat';
+    });
+  }
   for (const b of $app.querySelectorAll('[data-another]')) b.onclick = () => {
     const s = sOf(b.dataset.another);
     S.draft = newDraft({ photoId: s.photoId, lat: s.lat, lng: s.lng, source: s.locationSource || 'manual', at: s.at, seenBy: s.seenBy, inside: s.insideOutside === 'inside', excludeCat: id });

@@ -293,3 +293,8 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .pin.ring i { box-shadow: inset 0 0 0 4px #FFFFFF, 0 2px 8px rgba(0,0,0,0.25); }
 .homepin { width: 30px; height: 30px; border-radius: 8px; border: 2px solid #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; font-size: 15px; transform: translate(-50%, -50%); }
 .homeline { margin-top: 14px; background: var(--moss-pale); color: var(--moss); border-radius: 14px; padding: 10px 14px; font-size: 14px; font-weight: 600; }
+/* Crops (Beth 2026-10-03): photos not yet loaded or picked show whole, fitted; "Tap the cat" sets a focal point */
+.memthumb, .addphoto.has { background-size: contain; background-repeat: no-repeat; }
+.focusbox { position: relative; align-self: center; max-width: 100%; border-radius: 12px; overflow: hidden; background: var(--surface); line-height: 0; }
+.focusbox img { display: block; max-width: 100%; max-height: 60vh; cursor: crosshair; }
+.focusdot { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 14px; border: 3px solid #FFFFFF; box-shadow: 0 0 0 2px var(--moss), 0 2px 6px rgba(0,0,0,0.4); pointer-events: none; }

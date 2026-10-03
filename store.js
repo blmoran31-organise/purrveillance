@@ -47,7 +47,8 @@ async function firebaseStore(house) {
     mode: 'firebase',
     subscribe(f) { subs.add(f); if (state.ready.cats && state.ready.sightings) f({ cats: state.cats, sightings: state.sightings }); else if (lastError) f(null, lastError); return () => subs.delete(f); },
     async put(name, id, data) { await fs.setDoc(fs.doc(db, 'houses', house, name, id), data); return id; },
-    async patch(name, id, data) { await fs.updateDoc(fs.doc(db, 'houses', house, name, id), data); },
+    // A changed photo (focal point, delete) must not be served from the cache afterwards.
+    async patch(name, id, data) { await fs.updateDoc(fs.doc(db, 'houses', house, name, id), data); if (name === 'photos') photoCache.delete(id); },
     async photo(id) {
       if (!photoCache.has(id)) photoCache.set(id, fs.getDoc(fs.doc(db, 'houses', house, 'photos', id)).then(d => d.exists() ? d.data() : null));
       return photoCache.get(id);

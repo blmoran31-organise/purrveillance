@@ -276,3 +276,10 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .picks2 .pk b { font-size: 15px; }
 .picks2 .pk small { font-size: 12px; color: var(--caption); }
 .picks2 .addphoto:first-child { border-color: var(--moss); background: var(--moss-pale); }
+/* Meow Map camera button (replaces the floating bar that covered Near you) and cat page Edit details */
+.camfab { position: absolute; right: 12px; top: 12px; z-index: 600; width: 56px; height: 56px; border-radius: 28px; background: var(--moss); color: #FFFFFF; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 18px rgba(47,107,79,0.4); }
+.camfab svg { width: 26px; height: 26px; }
+.editbtn { align-self: flex-start; margin-top: 4px; height: 36px; padding: 0 14px; border-radius: 18px; border: 0; background: rgba(255,255,255,0.9); color: var(--ink); font-size: 13px; font-weight: 600; }
+.seg.wrap4 { flex-wrap: wrap; }
+.seg.wrap4 button { flex: 1 1 40%; font-size: 13px; }
+.aboutnote { margin-top: 14px; background: var(--surface); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; }

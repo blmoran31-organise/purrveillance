@@ -133,7 +133,7 @@ function render() {
   const r = route();
   killMaps();
   if (r.name !== 'camera') stopCamera();
-  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; }
+  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; }
   const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
@@ -215,9 +215,11 @@ function MeowMap() {
   $app.innerHTML = `${banner()}<div class="screen" style="overflow:hidden">
     <div class="head"><div><div class="title">MEOW MAP</div><div class="sub" id="mapsub">${n} cat${n === 1 ? '' : 's'} · ${S.data.sightings.length} sighting${S.data.sightings.length === 1 ? '' : 's'} · finding you…</div></div>
       <a href="#/catflap" class="av ${S.me === 'beth' ? 'beth' : ''}" style="width:44px;height:44px;border-radius:22px">${S.me ? PERSON[S.me][0] : '?'}</a></div>
-    <div class="mapwrap"><div id="map" style="position:absolute;inset:0"></div><div class="near" id="near"><div class="label">Near you</div><div class="sub">Finding your position…</div></div></div>
+    <div class="mapwrap"><div id="map" style="position:absolute;inset:0"></div>
+      <a class="camfab" href="#/camera" aria-label="Spotted one: open Pawparazzi">${I.camera}</a>
+      <div class="near" id="near"><div class="label">Near you</div><div class="sub">Finding your position…</div></div></div>
   </div>
-  <a class="fab" href="#/camera">${I.plus}Spotted one</a>${nav('map')}`;
+  ${nav('map')}`;
   const mapEl = document.getElementById('map');
   const m = guardMap(mapEl, 'meow map', () => makeMap(mapEl));
   const pins = [];
@@ -618,11 +620,24 @@ function CatEntry(id) {
   const c = e.cat, now = Date.now();
   const days = e.first !== null ? Math.max(0, Math.floor((L.startOfDay(now) - L.startOfDay(e.first)) / L.DAY)) : 0;
   const terr = L.territory(e);
-  const desc = [c.coat, c.homeNote].filter(Boolean).join(' · ');
+  const desc = [c.coat, c.markings, c.collar ? (c.collarColour ? c.collarColour + ' collar' : 'collar') : '', c.friendliness, c.homeNote].filter(Boolean).join(' · ');
   const nameBlock = S.renaming === id
     ? `<form class="rename" id="rn"><input id="rnin" class="field" value="${esc(c.name || '')}" placeholder="Name this cat" aria-label="New name"><button type="submit">Save</button></form>`
     : `<div class="nameline"><div class="nm">${esc(L.displayName(c))}</div><button class="pencil" id="pencil" aria-label="Rename this cat">${I.pencil}</button></div>
-       <div class="desc">${esc(desc ? desc + ' · ' : '')}tap the pencil to ${c.name ? 'rename' : 'name'}</div>`;
+       <div class="desc">${esc(desc || (c.name ? 'tap the pencil to rename' : 'tap the pencil to name'))}</div>
+       <button class="editbtn" id="editdetails">Edit details</button>`;
+  const COATS = ['Ginger', 'Black', 'Tux', 'Grey', 'Tabby', 'White', 'Calico', 'Fluffy'];
+  const FRIENDLY = ['runs off', 'watches', 'comes over', 'lap cat'];
+  const ed = S.editing === id ? (S.editDraft || (S.editDraft = { coat: c.coat || '', markings: c.markings || '', collar: !!c.collar, collarColour: c.collarColour || '', friendliness: c.friendliness || '', homeNote: c.homeNote || '', notes: c.notes || '' })) : null;
+  const editForm = ed ? `<div class="pad stack" style="gap:12px;padding-top:16px"><div class="label">Edit details</div>
+      <div class="stack8"><div class="label">Coat</div><div class="coats">${COATS.map(k => `<button data-ecoat="${k}" class="${ed.coat === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+      <div class="stack8"><label class="label" for="emark">Markings</label><input id="emark" class="field" value="${esc(ed.markings)}" placeholder="e.g. white bib, one white sock"></div>
+      <div class="stack8"><div class="label">Collar</div><div class="seg small"><button data-ecollar="0" class="${!ed.collar ? 'on' : ''}">None</button><button data-ecollar="1" class="${ed.collar ? 'on' : ''}">Yes</button></div>
+        ${ed.collar ? `<input id="ecolour" class="field" value="${esc(ed.collarColour)}" placeholder="Colour, e.g. red with a bell">` : ''}</div>
+      <div class="stack8"><div class="label">Friendliness</div><div class="seg small wrap4">${FRIENDLY.map(k => `<button data-efriend="${k}" class="${ed.friendliness === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
+      <div class="stack8"><label class="label" for="ehome">Home</label><input id="ehome" class="field" value="${esc(ed.homeNote)}" placeholder="e.g. number 27, goes in the catflap"></div>
+      <div class="stack8"><label class="label" for="enotes">Notes</label><textarea id="enotes" class="field" placeholder="anything else">${esc(ed.notes)}</textarea></div>
+      <button class="primary" id="esave">Save details</button><button class="ghost" id="ecancel">Cancel</button></div>` : '';
   const others = S.sums.filter(x => x.cat.id !== id).sort((a, b) => (b.last || 0) - (a.last || 0));
   const pickList = (attr) => `<div class="picklist">${others.map(x => `<button data-${attr}="${esc(x.cat.id)}"><span class="dot" style="background:${swatch(x.cat)}"${photoAttr(x.cat)}></span>${esc(L.displayName(x.cat))}<small>${x.count} sighting${x.count === 1 ? '' : 's'}</small></button>`).join('')}${attr === 'moveto' ? `<button data-moveto="new"><span class="dot newdot">+</span>New cat (Cat ${S.nextNum})</button>` : ''}</div>`;
   const row = s => {
@@ -652,6 +667,7 @@ function CatEntry(id) {
       <a class="round lt" style="left:20px" href="#/catalogue" aria-label="Back to Catalogue">${I.back}</a>
       <button class="round lt" style="right:20px" id="fav" aria-label="${c.favourite ? 'Remove from favourites' : 'Add to favourites'}">${I.heart(c.favourite).replace('#B8BCC4', '#17181C')}</button>
       ${nameBlock}</div>
+    ${editForm}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
@@ -662,6 +678,16 @@ function CatEntry(id) {
   // Buttons are wired FIRST, so nothing the territory map does can leave them dead (live bug 2026-10-03).
   document.getElementById('fav').onclick = () => saveCat(id, { favourite: !c.favourite }, c.favourite ? 'Removed from favourites' : 'Added to favourites');
   const p = document.getElementById('pencil'); if (p) p.onclick = () => { S.renaming = id; render(); const i = document.getElementById('rnin'); i.focus(); i.select(); };
+  const eb = document.getElementById('editdetails'); if (eb) eb.onclick = () => { S.editing = id; S.editDraft = null; render(); };
+  if (ed) {
+    const keepEd = () => { for (const [f, k] of [['emark', 'markings'], ['ecolour', 'collarColour'], ['ehome', 'homeNote'], ['enotes', 'notes']]) { const el = document.getElementById(f); if (el) ed[k] = el.value; } };
+    for (const b of $app.querySelectorAll('[data-ecoat]')) b.onclick = () => { keepEd(); ed.coat = ed.coat === b.dataset.ecoat ? '' : b.dataset.ecoat; render(); };
+    for (const b of $app.querySelectorAll('[data-ecollar]')) b.onclick = () => { keepEd(); ed.collar = b.dataset.ecollar === '1'; render(); };
+    for (const b of $app.querySelectorAll('[data-efriend]')) b.onclick = () => { keepEd(); ed.friendliness = ed.friendliness === b.dataset.efriend ? '' : b.dataset.efriend; render(); };
+    document.getElementById('ecancel').onclick = () => { S.editing = null; S.editDraft = null; render(); };
+    document.getElementById('esave').onclick = () => { keepEd(); const d = S.editDraft; S.editing = null; S.editDraft = null;
+      saveCat(id, { coat: d.coat, swatch: L.swatchFor(d.coat, id), markings: d.markings.trim(), collar: d.collar, collarColour: d.collar ? d.collarColour.trim() : '', friendliness: d.friendliness, homeNote: d.homeNote.trim(), notes: d.notes.trim() }, 'Details saved'); };
+  }
   const rn = document.getElementById('rn');
   if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
   const sOf = sid => e.sightings.find(x => x.id === sid);
@@ -876,7 +902,7 @@ async function boot() {
     }
     const r = route().name;
     // Don't redraw a form or the camera under someone's thumb; they pick up new data on their next screen.
-    if (first || !['repurrt', 'camera', 'meowmeries'].includes(r) && !S.renaming) render();
+    if (first || !['repurrt', 'camera', 'meowmeries'].includes(r) && !S.renaming && !S.editing) render();
     first = false;
   });
 }

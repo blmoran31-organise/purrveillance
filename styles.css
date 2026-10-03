@@ -270,3 +270,9 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .drow small { font-size: 12px; color: var(--caption); }
 .dthumb { width: 48px; height: 48px; border-radius: 12px; flex: 0 0 auto; background-size: cover; background-position: center; }
 .memfoot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.picks2 { display: flex; flex-direction: column; gap: 8px; }
+.picks2 .addphoto { justify-content: flex-start; padding: 0 16px; height: 68px; }
+.picks2 .pk { display: flex; flex-direction: column; gap: 2px; text-align: left; }
+.picks2 .pk b { font-size: 15px; }
+.picks2 .pk small { font-size: 12px; color: var(--caption); }
+.picks2 .addphoto:first-child { border-color: var(--moss); background: var(--moss-pale); }

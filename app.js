@@ -421,11 +421,20 @@ async function saveDraft(d) {
 async function readOldPhoto(file) {
   let gps = null, at = null;
   try { if (window.exifr) { gps = await window.exifr.gps(file); const t = await window.exifr.parse(file, ['DateTimeOriginal', 'CreateDate']); const d = t && (t.DateTimeOriginal || t.CreateDate); if (d instanceof Date && !isNaN(d)) at = d.getTime(); } } catch (e) { console.warn('exif', e); }
-  const img = await loadImage(file);
+  let img;
+  try { img = await loadImage(file); }
+  catch (x) {
+    // HEIC will not decode in Chrome; most phones embed a small JPEG preview, which is enough for a thumbnail.
+    const th = window.exifr && await window.exifr.thumbnail(file).catch(() => null);
+    if (!th) throw x;
+    img = await loadImage(new Blob([th], { type: 'image/jpeg' }));
+  }
   const photo = await makeThumb(img, img.naturalWidth, img.naturalHeight);
   const place = gps ? L.cleanPlace(gps.latitude, gps.longitude) : null;
+  // blanked: the GPS tag is there but its numbers were removed (Android's Photos picker does this).
+  const gpsState = place ? 'kept' : gps && ('latitude' in gps || 'longitude' in gps) ? 'blanked' : 'none';
   const when = at || file.lastModified || Date.now();
-  return { key: [file.name, file.size, when].join('|'), name: file.name, photo, at: when, atSource: at ? 'exif' : 'file', lat: place ? place.lat : undefined, lng: place ? place.lng : undefined, source: place ? 'exif' : null, cats: [], include: true };
+  return { key: [file.name, file.size, when].join('|'), name: file.name, photo, at: when, atSource: at ? 'exif' : 'file', lat: place ? place.lat : undefined, lng: place ? place.lng : undefined, source: place ? 'exif' : null, gpsState, cats: [], include: true };
 }
 
 function Meowmeries() {
@@ -452,7 +461,7 @@ function Meowmeries() {
   };
   const card = (it, i) => {
     const placed = !!L.cleanPlace(it.lat, it.lng);
-    const status = it.dup ? 'Already logged, skipped' : !it.include ? 'Skipped' : placed ? (it.source === 'exif' ? 'Placed from the photo' : 'Placed by hand') : 'No location in this photo';
+    const status = it.dup ? 'Already logged, skipped' : !it.include ? 'Skipped' : placed ? (it.source === 'exif' ? '📍 Placed from the photo' : 'Placed by hand') : it.gpsState === 'blanked' ? 'Location removed by the picker: place it' : 'No location in this photo';
     const newInputs = it.cats.filter(c => c && c.startsWith('new:'));
     return `<div class="memcard ${!it.include || it.dup ? 'off' : ''}">
       <div class="memtop"><div class="memthumb" style="background-image:url('${it.photo.data}')"></div>
@@ -470,8 +479,12 @@ function Meowmeries() {
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="formhead"><button class="back" id="back">${I.back}Back</button><div style="font-size:18px;font-weight:700">MEOWMERIES</div><div style="width:50px"></div></div>
     <div class="pad stack" style="gap:12px;padding-bottom:16px">
-      <label class="addphoto">${I.gallery}<span style="font-size:15px;font-weight:600">${M.items.length ? 'Add more old photos' : 'Pick old photos'}</span><span class="sub" style="font-size:13px">pick as many as you like</span>
-        <input id="mempick" type="file" accept="image/*" multiple aria-label="Pick old photos"></label>
+      <div class="picks2">
+        <label class="addphoto">${I.gallery}<span class="pk"><b>Pick from Files (keeps location)</b><small>open DCIM, then Camera · jpg and heic</small></span>
+          <input id="memfiles" type="file" multiple aria-label="Pick from Files"></label>
+        <label class="addphoto">${I.gallery}<span class="pk"><b>${M.items.length ? 'Add more from Photos' : 'Pick from Photos'}</b><small>Android removes the location here</small></span>
+          <input id="mempick" type="file" accept="image/*" multiple aria-label="Pick from Photos"></label>
+      </div>
       ${M.busy ? `<div class="note">${esc(M.busy)}</div>` : ''}
       ${M.items.length ? `<div class="stack8"><div class="label">Who saw these</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-mwho="${p}" class="${M.who === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>
         <div class="sub">Each photo starts as its own new numbered cat. Change any that are a cat you already know; merge duplicates later from a cat's page.</div>`
@@ -482,17 +495,29 @@ function Meowmeries() {
       <div class="note">${waiting ? `${waiting} photo${waiting === 1 ? '' : 's'} still need${waiting === 1 ? 's' : ''} a place or a cat, or skip ${waiting === 1 ? 'it' : 'them'}` : `Saves to both phones${newCount ? ` · ${newCount} new cat${newCount === 1 ? '' : 's'}` : ''}`}</div></div>` : ''}`;
 
   document.getElementById('back').onclick = () => { if (!M.busy) S.mem = null; go('catflap'); };
-  document.getElementById('mempick').onchange = async e => {
-    const files = [...(e.target.files || [])]; if (!files.length) return;
+  // Files gives back anything, so it is narrowed to photos here, after picking.
+  const isPhoto = f => /^image\/(jpe?g|heic|heif)$/i.test(f.type) || /\.(jpe?g|heic|heif)$/i.test(f.name);
+  const take = async (e, narrow) => {
+    const picked = [...(e.target.files || [])]; e.target.value = '';
+    const files = narrow ? picked.filter(isPhoto) : picked;
+    const notPhotos = picked.length - files.length;
+    if (!files.length) { M.busy = notPhotos ? `None of those were jpg or heic photos (${notPhotos} other file${notPhotos === 1 ? '' : 's'} left out).` : null; render(); M.busy = null; return; }
     let k = 0, failed = 0;
     for (const f of files) {
       M.busy = `Reading ${++k} of ${files.length}…`; render();
       try { const it = await readOldPhoto(f); if (!M.items.some(x => x.key === it.key)) { it.cats = [newMade()]; M.items.push(it); } } catch { failed++; }
     }
     M.items.sort((a, b) => a.at - b.at);
-    M.busy = failed ? `${failed} photo${failed === 1 ? '' : 's'} could not be opened here and ${failed === 1 ? 'was' : 'were'} left out.` : null;
-    render();
+    const kept = M.items.filter(it => files.some(f => it.name === f.name) && it.gpsState === 'kept').length;
+    const notes = [];
+    if (failed) notes.push(`${failed} photo${failed === 1 ? '' : 's'} could not be opened here and ${failed === 1 ? 'was' : 'were'} left out`);
+    if (notPhotos) notes.push(`${notPhotos} file${notPhotos === 1 ? ' that was' : 's that were'} not a jpg or heic left out`);
+    notes.push(`${kept} of ${files.length - failed} came with their location`);
+    M.busy = notes.join(' · ') + '.';
+    render(); M.busy = null;
   };
+  document.getElementById('memfiles').onchange = e => take(e, true);
+  document.getElementById('mempick').onchange = e => take(e, false);
   for (const b of $app.querySelectorAll('[data-mwho]')) b.onclick = () => { M.who = b.dataset.mwho; render(); };
   for (const s of $app.querySelectorAll('.memsel')) s.onchange = () => {
     const it = M.items[+s.dataset.i], k = +s.dataset.k;

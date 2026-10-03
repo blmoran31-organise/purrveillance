@@ -35,13 +35,14 @@ const I = {
   next: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>',
   gallery: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-5 4 4 3-3 6 6"/><circle cx="16" cy="9" r="1.5"/></svg>',
   flip: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 0 1 14-4l2 2M20 14a8 8 0 0 1-14 4l-2-2"/><path d="M20 4v4h-4M4 20v-4h4"/></svg>',
+  pen: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M12 8l4 4"/></svg>',
   camera: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-3h6l2 3h3v12H4z"/><circle cx="12" cy="13" r="3.5"/></svg>',
   pencil: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10-10-4-4L4 16z"/><path d="M12 8l4 4"/></svg>',
   heart: on => `<svg width="22" height="22" viewBox="0 0 24 24" fill="${on ? '#D9641E' : 'none'}" stroke="${on ? '#D9641E' : '#B8BCC4'}" stroke-width="2" stroke-linejoin="round"><path d="M12 20s-7-4.6-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.4-7 10-7 10z"/></svg>`,
 };
 
 function nav(on) {
-  const items = [['catflap', 'Catflap', I.home], ['map', 'Meow Map', I.map], ['camera', 'Pawparazzi', I.paw], ['catalogue', 'Catalogue', I.cat], ['stats', 'Meowmentum', I.stats]];
+  const items = [['catflap', 'Catflap', I.home], ['map', 'Meow Map', I.map], ['catalogue', 'Catalogue', I.cat], ['stats', 'Meowmentum', I.stats]];
   return `<nav class="bar">${items.map(([r, t, i]) => `<a href="#/${r}" class="${r === on ? 'on' : ''}">${i}${t}</a>`).join('')}</nav>`;
 }
 function banner() {
@@ -51,20 +52,42 @@ function banner() {
 }
 
 // ---------- data ----------
+// Soft delete: nothing ever leaves the database. Deleted or merged cats, deleted sightings and hidden photos are
+// filtered out HERE, once, so every screen, map, count and stat agrees. S.raw keeps everything for Recently deleted.
 function setData(d) {
-  const sightings = d.sightings.map(s => { const p = L.cleanPlace(s.lat, s.lng); return { ...s, lat: p ? p.lat : null, lng: p ? p.lng : null }; });
-  d = { cats: d.cats, sightings };
-  S.data = d; S.sums = L.summarise(d.cats, d.sightings);
+  const clean = s => { const p = L.cleanPlace(s.lat, s.lng); return { ...s, lat: p ? p.lat : null, lng: p ? p.lng : null }; };
+  S.raw = { cats: d.cats, sightings: d.sightings.map(clean) };
+  const cats = d.cats.filter(c => !c.deleted && !c.mergedInto);
+  const live = new Set(cats.map(c => c.id));
+  const sightings = S.raw.sightings.filter(s => !s.deleted && live.has(s.catId));
+  S.hiddenPhotos = new Set(S.raw.sightings.filter(s => s.photoDeleted && s.photoId).map(s => s.photoId));
+  S.nextNum = L.nextNum(d.cats);
+  S.data = { cats, sightings }; S.sums = L.summarise(cats, sightings);
   S.byId = new Map(S.sums.map(e => [e.cat.id, e]));
 }
 function swatch(cat) { return cat.swatch || L.swatchFor(cat.coat, cat.id); }
-function photoAttr(cat) { return cat.thumbPhotoId ? ` data-photo="${esc(cat.thumbPhotoId)}"` : ''; }
+function photoOk(id) { return !!id && !(S.hiddenPhotos && S.hiddenPhotos.has(id)); }
+// The cat's chosen photo if it is still visible, else its newest visible sighting photo.
+function catPhotoId(cat) {
+  if (photoOk(cat.thumbPhotoId)) return cat.thumbPhotoId;
+  const e = S.byId.get(cat.id); const s = e && e.sightings.find(x => photoOk(x.photoId));
+  return s ? s.photoId : null;
+}
+function photoAttr(cat) { const id = catPhotoId(cat); return id ? ` data-photo="${esc(id)}"` : ''; }
+function photoAttrId(id) { return photoOk(id) ? ` data-photo="${esc(id)}"` : ''; }
 async function hydratePhotos(root = $app) {
   for (const el of root.querySelectorAll('[data-photo]')) {
     const id = el.dataset.photo; el.removeAttribute('data-photo');
-    try { const p = await S.store.photo(id); if (p && p.data) { el.style.backgroundImage = `url("${p.data}")`; el.classList.add('hasphoto'); const t = el.querySelector('.ini'); if (t) t.textContent = ''; } } catch (e) { console.warn('photo', id, e); }
+    try { const p = await S.store.photo(id); if (p && p.data && !p.deleted) { el.style.backgroundImage = `url("${p.data}")`; el.classList.add('hasphoto'); const t = el.querySelector('.ini'); if (t) t.textContent = ''; } } catch (e) { console.warn('photo', id, e); }
   }
 }
+function counts() { return { cats: S.data.cats.length, sightings: S.data.sightings.length }; }
+// After a save, a crossed milestone replaces the plain toast.
+function celebrate(before, added) {
+  const lines = L.milestones(before, { cats: before.cats + (added.cats || 0), sightings: before.sightings + (added.sightings || 0) });
+  if (lines.length) S.toast = lines.join(' · ');
+}
+const stamp = () => ({ deletedAt: Date.now(), deletedBy: S.me || 'unknown' });
 
 function getPos(maxAge = 60000) {
   if (S.pos && Date.now() - S.posAt < maxAge) return Promise.resolve(S.pos);
@@ -110,8 +133,8 @@ function render() {
   const r = route();
   killMaps();
   if (r.name !== 'camera') stopCamera();
-  if (r.name !== 'cat') S.renaming = null;
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum };
+  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; }
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
@@ -121,45 +144,69 @@ function render() {
   }
 }
 
-// ---------- 1. CATFLAP ----------
+// ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
+// Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
 function Catflap() {
-  const cats = S.sums.filter(e => e.count);
-  let flash;
-  if (!S.me) {
-    flash = `<div class="flash"><div class="k">WHOSE PHONE IS THIS?</div><div class="d">So Mewsflash knows who "you" are. Change it any time with the B and C buttons.</div>
-      <div class="seg"><button data-me="beth">Beth</button><button data-me="canada">Canada</button></div></div>`;
-  } else {
-    const mf = L.mewsflash(S.sums, S.me);
-    const now = Date.now();
-    const item = (e, line) => {
-      const unnamed = !e.cat.name;
-      return `<a class="item" href="#/cat/${esc(e.cat.id)}"><div class="thumb" style="background-color:${unnamed ? 'var(--moss)' : swatch(e.cat)}"${photoAttr(e.cat)}><span class="ini">${unnamed ? 'NEW' : ''}</span></div>
-        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div class="t">${esc(L.displayName(e.cat))}</div><div class="d">${line}${unnamed ? ' · needs a name' : ''}</div></div></a>`;
-    };
-    const when = e => { const s = e.lastSighting; return L.dayWord(s.at, now) + ', ' + L.hhmm(s.at); };
-    const rows = [];
-    for (const e of mf.youMissed) rows.push(item(e, `${esc(themName())} saw it ${esc(when(e))} · you never have`));
-    if (mf.theyMissed.length) {
-      rows.push(`<div class="split">${esc(themName().toUpperCase())} HAS NOT SEEN</div>`);
-      for (const e of mf.theyMissed) rows.push(item(e, `You saw it ${esc(when(e))} · ${esc(themName())} never has`));
-    }
-    const count = mf.youMissed.length ? `${mf.youMissed.length} you have not seen` : '';
-    const empty = !cats.length ? '<div class="d">No cats yet. Spot one and it lands here for the other phone.</div>' : !rows.length ? '<div class="d">You have both seen every cat.</div>' : '';
-    flash = `<div class="flash"><div style="display:flex;justify-content:space-between;align-items:center"><div class="k">MEWSFLASH</div><div class="n">${count}</div></div>${rows.join('')}${empty}</div>`;
+  const now = Date.now();
+  const week = L.stats(S.data.cats, S.data.sightings, 'week', now);
+  const new30 = L.stats(S.data.cats, S.data.sightings, 'month', now).newCats;
+  const streak = L.streak(S.data.sightings, now);
+  const numbered = S.data.cats.filter(L.isUnnamed).length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  let flash = '';
+  if (S.me) {
+    const mf = L.mewsflash(S.sums, S.me), them = themName(), other = L.other(S.me);
+    const item = (e, line) => `<a class="item" href="#/cat/${esc(e.cat.id)}"><div class="thumb" style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}><span class="ini">${esc(L.initial(e.cat))}</span></div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><div class="t">${esc(L.displayName(e.cat))}</div><div class="d">${line}</div></div></a>`;
+    const rows = [
+      ...mf.youMissed.map(e => item(e, `${esc(them)} has seen ${esc(L.displayName(e.cat))} ${plural(e.seen[other], 'time')}, you never have`)),
+      ...mf.theyMissed.map(e => item(e, `You have seen ${esc(L.displayName(e.cat))} ${plural(e.seen[S.me], 'time')}, ${esc(them)} never has`)),
+    ];
+    if (rows.length) flash = `<div class="flash"><div style="display:flex;justify-content:space-between;align-items:center"><div class="k">😼 MEWSFLASH</div><div class="n">${mf.youMissed.length ? mf.youMissed.length + ' you have not seen' : ''}</div></div>${rows.join('')}</div>`;
   }
-  const purr = L.stats(S.data.cats, S.data.sightings, 'week', Date.now()).purr;
+  const latest = S.data.sightings.slice().sort((a, b) => b.at - a.at).slice(0, 12);
+  const strip = latest.length ? `<div class="stack8"><div class="label">Latest sightings</div><div class="latest">${latest.map(s => {
+    const c = S.byId.get(s.catId)?.cat; if (!c) return '';
+    const pid = photoOk(s.photoId) ? s.photoId : catPhotoId(c);
+    return `<a class="lcard" href="#/cat/${esc(c.id)}"><div class="lface" style="background-color:${swatch(c)}"${pid ? ` data-photo="${esc(pid)}"` : ''}><span class="ini">${esc(L.initial(c))}</span></div><b>${esc(L.displayName(c))}</b><small>${esc(L.dayWord(s.at, now))}</small></a>`;
+  }).join('')}</div></div>` : '';
+  const logCard = (href, icon, title, cap, fresh) => `<a class="tile logc" href="${href}"${fresh ? ' data-fresh' : ''}>${icon}<div style="display:flex;flex-direction:column;gap:2px"><b>${title}</b><small>${cap}</small></div></a>`;
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="head"><div><div class="eyebrow">PURRVEILLANCE</div><div class="title">Catflap</div></div>
       <div class="who"><button class="av beth ${S.me === 'beth' ? 'me' : ''}" data-me="beth" aria-label="This is Beth's phone">B</button><button class="av ${S.me === 'canada' ? 'me' : ''}" data-me="canada" aria-label="This is Canada's phone">C</button></div></div>
-    <div class="pad stack" style="padding-bottom:20px">${flash}
-      <div class="tiles2">
-        <a class="tile go" href="#/camera">${I.paw}<b>Spotted one</b></a>
-        <a class="tile" href="#/meowmeries">${I.gallery}<div style="display:flex;flex-direction:column;gap:2px"><b>Meowmeries</b><small>drop old photos, each logged by its time and place</small></div></a>
+    <div class="pad stack" style="padding-bottom:20px">
+      ${!S.me ? '<div class="hint">Tap <b>B</b> or <b>C</b> to say whose phone this is.</div>' : ''}
+      ${streak >= 2 ? `<div class="streak">🔥 ${streak}-day streak between you. Keep it going.</div>` : streak === 1 ? '<div class="streak">🐾 A cat logged today. Tomorrow starts a streak.</div>' : ''}
+      <div class="logs">
+        ${logCard('#/camera', I.camera, 'Pawparazzi', 'take a photo')}
+        ${logCard('#/repurrt', I.pen, 'Repurrt', 'no photo', true)}
+        ${logCard('#/meowmeries', I.gallery, 'Meowmeries', 'old photos')}
       </div>
-      <div class="strip"><div class="l">Purrometer this week</div><div class="r"><span><b>Beth</b> ${purr.beth} pet${purr.beth === 1 ? '' : 's'}</span><span><b>Canada</b> ${purr.canada} pet${purr.canada === 1 ? '' : 's'}</span></div></div>
+      <div class="statrow">
+        <div class="st"><span>😺</span><b>${S.data.cats.length}</b><small>in The Catalogue</small></div>
+        <div class="st"><span>🐈</span><b>${new30}</b><small>new, 30 days</small></div>
+        <div class="st"><span>👀</span><b>${week.sightings}</b><small>sightings this week</small></div>
+        <div class="st"><span>😻</span><b>${week.purr.beth + week.purr.canada}</b><small>pets this week</small></div>
+      </div>
+      ${flash}
+      ${strip}
+      ${numbered ? `<a class="nudge" href="#/catalogue" id="nudge">🐈‍⬛ ${numbered === 1 ? '1 cat is' : numbered + ' cats are'} still ${numbered === 1 ? 'a number' : 'numbers'}. Name ${numbered === 1 ? 'it' : 'them'} ${I.next}</a>` : ''}
+      <div class="furcast" id="furcast"><div class="fk"><span>🔮 FURCAST</span><span class="sub" id="fcwhen">${esc(L.longStamp(now).split(', ')[1])}</span></div><div id="fcbody" class="sub">Working out the odds…</div></div>
     </div></div>${nav('catflap')}`;
   for (const b of $app.querySelectorAll('[data-me]')) b.onclick = () => { S.me = b.dataset.me; LS.set('me', S.me); render(); };
   for (const a of $app.querySelectorAll('[data-fresh]')) a.onclick = () => { S.draft = null; };
+  const nd = document.getElementById('nudge'); if (nd) nd.onclick = () => { S.filter = 'unnamed'; };
+  const fill = pos => {
+    const body = document.getElementById('fcbody'); if (!body) return;
+    const fc = L.furcast(S.sums, pos, Date.now());
+    if (fc.total < 3) { body.innerHTML = 'Log a few more cats and Furcast starts guessing who you might see.'; return; }
+    const line = !pos ? 'Allow location to see which cat is likeliest near you right now.'
+      : fc.pick ? `Good odds of <b>${esc(L.displayName(fc.pick.cat))}</b> right now: ${fc.pick.nearAndTime ? `${fc.pick.nearAndTime} of ${fc.pick.total} sightings were within 150 m of here between ${fc.window}` : `${fc.pick.near} of ${fc.pick.total} sightings were within 150 m of here`}.`
+      : 'No cats logged within 150 m of here yet. Somewhere new?';
+    body.innerHTML = `<div class="fline">${line}</div><div class="fslots"><div><b>${fc.slots.morning || '-'}</b><small>best morning</small></div><div><b>${fc.slots.evening || '-'}</b><small>best evening</small></div><div><b>${fc.slots.busiest || '-'}</b><small>busiest day</small></div></div>`;
+  };
+  fill(S.pos && Date.now() - S.posAt < 300000 ? S.pos : null);
+  getPos().then(p => { if (route().name === 'catflap') fill(p); });
 }
 
 // ---------- 2. MEOW MAP ----------
@@ -176,9 +223,9 @@ function MeowMap() {
   const pins = [];
   for (const e of S.sums) {
     const p = L.lastPosition(e); if (!p) continue;
-    const unnamed = !e.cat.name;
-    const label = unnamed ? (L.startOfDay(e.first) === L.startOfDay(Date.now()) ? 'New today' : 'Unnamed') : `${L.displayName(e.cat)} · ${e.count}`;
-    const html = `<div class="pin ${unnamed ? 'unnamed' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)};${unnamed ? 'font-size:20px' : ''}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
+    const unnamed = L.isUnnamed(e.cat);
+    const label = `${L.displayName(e.cat)} · ${e.count}`;
+    const html = `<div class="pin ${unnamed ? 'unnamed' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
     if (m) guardMap(null, 'pin ' + e.cat.id, () => { const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(html) }).addTo(m); mk.on('click', () => go('cat/' + e.cat.id)); pins.push([p.lat, p.lng]); });
   }
   const fallback = lastKnownPlace();
@@ -214,7 +261,9 @@ async function draftFromFile(file) {
   try { if (window.exifr) { gps = await window.exifr.gps(file); const t = await window.exifr.parse(file, ['DateTimeOriginal', 'CreateDate']); const d = t && (t.DateTimeOriginal || t.CreateDate); if (d instanceof Date && !isNaN(d)) at = d.getTime(); } } catch (e) { console.warn('exif', e); }
   const img = await loadImage(file);
   const photo = await makeThumb(img, img.naturalWidth, img.naturalHeight);
-  if (gps && typeof gps.latitude === 'number') return newDraft({ photo, lat: gps.latitude, lng: gps.longitude, source: 'exif', at: at || Date.now() });
+  // NaN is typeof 'number': Android's picker blanks GPS to 0/0, which reads as NaN (18 live sightings, 2026-10-03).
+  const exifPlace = gps ? L.cleanPlace(gps.latitude, gps.longitude) : null;
+  if (exifPlace) return newDraft({ photo, lat: exifPlace.lat, lng: exifPlace.lng, source: 'exif', at: at || Date.now() });
   const pos = await getPos();
   return newDraft({ photo, lat: pos?.lat, lng: pos?.lng, source: pos ? 'phone' : 'none', at: at || Date.now(), noGpsInPhoto: true });
 }
@@ -225,7 +274,7 @@ function newDraft(o = {}) {
 function Pawparazzi() {
   const facing = S.facing || 'environment';
   $app.innerHTML = `<div class="screen dark">
-    <div class="cam-head"><a class="round" href="#/map" aria-label="Back to map">${I.back}</a><div style="font-size:18px;font-weight:700;letter-spacing:0.5px">PAWPARAZZI</div><div style="width:44px"></div></div>
+    <div class="cam-head"><a class="round" href="#/catflap" aria-label="Back to the Catflap">${I.back}</a><div style="font-size:18px;font-weight:700;letter-spacing:0.5px">PAWPARAZZI</div><div style="width:44px"></div></div>
     <div class="viewfinder"><video id="vid" playsinline muted autoplay></video><div class="frame"></div><div class="hint" id="hint">point it at the cat</div>
       <div class="chip-dark" style="left:16px" id="where"><span style="width:8px;height:8px;border-radius:4px;background:var(--you);display:inline-block"></span>finding you…</div>
       <div class="chip-dark" style="right:16px" id="nearchip" hidden></div></div>
@@ -275,20 +324,20 @@ function Repurrt() {
   const nearPinned = pinAt ? L.nearest(named, pinAt) : [];
   const near = [...nearPinned, ...byRecent(named.filter(e => !nearPinned.some(x => x.cat.id === e.cat.id)))];
   const close = near.filter(e => e.distance <= 250);
-  const shown = S.showAllChips ? near : close;
+  const shown = (S.showAllChips ? near : close).filter(e => e.cat.id !== d.excludeCat);
   if (d.catId && d.catId !== 'new' && !shown.some(e => e.cat.id === d.catId)) { const sel = near.find(e => e.cat.id === d.catId); if (sel) shown.unshift(sel); }
   const more = near.length - shown.length;
   const chip = e => `<button class="chip ${d.catId === e.cat.id ? 'on' : ''}" data-cat="${esc(e.cat.id)}"><div class="face" style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}></div><b>${esc(L.displayName(e.cat))}</b><small>${isFinite(e.distance) ? L.distWord(e.distance) : (e.last ? L.dayWord(e.last, Date.now()) : 'no pins')}</small></button>`;
   const sel = d.catId && d.catId !== 'new' ? S.byId.get(d.catId) : null;
-  const saveLabel = d.catId === 'new' ? (d.name.trim() ? `Save new cat: ${d.name.trim()}` : 'Save new cat (unnamed)') : sel ? `Save sighting of ${L.displayName(sel.cat)}` : 'Pick a cat first';
+  const saveLabel = d.catId === 'new' ? (d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`) : sel ? `Save sighting of ${L.displayName(sel.cat)}` : 'Pick a cat first';
   const summary = `${d.inside ? 'inside' : 'outside'}, ${d.petted ? 'petted' : 'not petted'} · ${L.longStamp(d.at)}`;
   const COATS = ['Ginger', 'Black', 'Tux', 'Grey', 'Tabby', 'White', 'Calico', 'Fluffy'];
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="formhead"><button class="back" id="back">${I.back}Back</button><div style="font-size:18px;font-weight:700">REPURRT</div><div style="width:50px"></div></div>
     <div class="pad stack" style="gap:12px;padding-bottom:16px">
-      <label class="addphoto ${d.photo ? 'has' : ''}" ${d.photo ? `style="background-image:url('${d.photo.data}')"` : ''}>
+      ${d.photoId && !d.photo ? `<div class="addphoto has"${photoAttrId(d.photoId)}><span class="cap">Same photo · pick the other cat in it</span></div>` : `<label class="addphoto ${d.photo ? 'has' : ''}" ${d.photo ? `style="background-image:url('${d.photo.data}')"` : ''}>
         ${d.photo ? `<span class="cap">${d.noGpsInPhoto ? 'Photo had no location · tap to change' : 'Tap to change photo'}</span>` : `${I.camera}<span style="font-size:15px;font-weight:600">Add a photo</span><span class="sub" style="font-size:13px">optional</span>`}
-        <input id="addphoto" type="file" accept="image/*" aria-label="Add a photo"></label>
+        <input id="addphoto" type="file" accept="image/*" aria-label="Add a photo"></label>`}
       <div class="stack8"><div class="label">Where</div><div class="wheremap"><div id="wmap" style="position:absolute;inset:0"></div><div class="cap">${capText}</div></div></div>
       <div class="stack8"><div class="label">Which cat? (nearest first)</div>
         <div class="chips">${shown.map(chip).join('')}
@@ -322,8 +371,8 @@ function Repurrt() {
   for (const b of $app.querySelectorAll('[data-in]')) b.onclick = () => { keep(); d.inside = b.dataset.in === '1'; render(); };
   for (const b of $app.querySelectorAll('[data-pet]')) b.onclick = () => { keep(); d.petted = b.dataset.pet === '1'; render(); };
   for (const b of $app.querySelectorAll('[data-coat]')) b.onclick = () => { keep(); d.coat = d.coat === b.dataset.coat ? '' : b.dataset.coat; render(); };
-  const nm = document.getElementById('catname'); if (nm) nm.oninput = () => { d.name = nm.value; const s = document.getElementById('save'); if (d.catId === 'new') s.textContent = d.name.trim() ? `Save new cat: ${d.name.trim()}` : 'Save new cat (unnamed)'; };
-  document.getElementById('addphoto').onchange = async e => {
+  const nm = document.getElementById('catname'); if (nm) nm.oninput = () => { d.name = nm.value; const s = document.getElementById('save'); if (d.catId === 'new') s.textContent = d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`; };
+  const ap = document.getElementById('addphoto'); if (ap) ap.onchange = async e => {
     const f = e.target.files && e.target.files[0]; if (!f) return; keep();
     try { const nd = await draftFromFile(f); d.photo = nd.photo; d.noGpsInPhoto = nd.noGpsInPhoto; if (nd.source === 'exif') { d.lat = nd.lat; d.lng = nd.lng; d.source = 'exif'; d.at = nd.at; } render(); }
     catch (x) { const er = document.getElementById('saveerr'); er.textContent = x.message; er.hidden = false; }
@@ -333,45 +382,50 @@ function Repurrt() {
     const er = document.getElementById('saveerr'); er.hidden = true;
     if (!L.cleanPlace(d.lat, d.lng)) { er.textContent = 'Drag the pin to where you saw it, then save.'; er.hidden = false; return; }
     const btn = document.getElementById('save'); btn.disabled = true; btn.textContent = 'Saving…';
-    try { const catId = await saveDraft(d); S.draft = null; S.showAllChips = false; S.toast = `Saved to both phones · ${summary}`; go('cat/' + catId); }
-    catch (x) { console.error(x); btn.disabled = false; btn.textContent = saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
+    try { S.toast = `Saved to both phones · ${summary}`; const catId = await saveDraft(d); S.draft = null; S.showAllChips = false; go('cat/' + catId); }
+    catch (x) { console.error(x); S.toast = null; btn.disabled = false; btn.textContent = saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
   };
 }
 
 async function saveDraft(d) {
   const now = Date.now();
-  let catId = d.catId;
+  const before = counts();
+  let catId = d.catId, newCat = false;
   const name = d.name.trim();
   if (catId === 'new') {
-    catId = newId();
-    await S.store.put('cats', catId, { name, coat: d.coat || '', swatch: L.swatchFor(d.coat, catId), markings: '', homeNote: '', favourite: false, createdAt: now, createdBy: S.me || d.seenBy, thumbPhotoId: null });
+    catId = newId(); newCat = true;
+    await S.store.put('cats', catId, newCatDoc(catId, name, d.coat));
   } else {
     const cat = S.byId.get(catId)?.cat;
     if (cat && name && name !== (cat.name || '')) await S.store.patch('cats', catId, { name });
   }
-  let photoId = null;
-  if (d.photo) {
+  // A shared photo (another cat in the same photo) is pointed at, never stored twice.
+  let photoId = d.photoId || null;
+  if (!photoId && d.photo) {
     photoId = newId();
     await S.store.put('photos', photoId, { data: d.photo.data, w: d.photo.w, h: d.photo.h, catId, at: d.at, createdAt: now });
-    await S.store.patch('cats', catId, { thumbPhotoId: photoId });
   }
+  if (photoId && (d.photo || !photoOk(S.byId.get(catId)?.cat.thumbPhotoId))) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
   const place = L.cleanPlace(d.lat, d.lng);
   if (!place) throw new Error('no location to save');
   await S.store.put('sightings', newId(), { catId, at: d.at, lat: place.lat, lng: place.lng, locationSource: d.source === 'none' ? 'manual' : d.source, seenBy: d.seenBy, insideOutside: d.inside ? 'inside' : 'outside', petted: !!d.petted, note: d.note.trim(), photoId, createdAt: now, createdBy: S.me || d.seenBy });
+  d.savedMsg = null;
+  celebrate(before, { cats: newCat ? 1 : 0, sightings: 1 });
   return catId;
 }
 
 // ---------- MEOWMERIES (Job 6): old photos, each a sighting at its own time and place ----------
-// Photos with GPS are placed from the photo; the rest get a "Place it" pin. One batch confirm at the end.
-// A photo already logged (same file name, size and time taken) is marked and skipped, so a re-import can't double-count.
+// Every photo DEFAULTS to its own new numbered cat (Beth, 2026-10-03: "the default should be give it a fresh number
+// unless i specify otherwise"), so 100 photos need no taps. Pick an existing cat to override; "+ another cat" puts
+// a second cat in the same photo (both sightings share one stored photo). A photo already logged is skipped.
 async function readOldPhoto(file) {
   let gps = null, at = null;
   try { if (window.exifr) { gps = await window.exifr.gps(file); const t = await window.exifr.parse(file, ['DateTimeOriginal', 'CreateDate']); const d = t && (t.DateTimeOriginal || t.CreateDate); if (d instanceof Date && !isNaN(d)) at = d.getTime(); } } catch (e) { console.warn('exif', e); }
   const img = await loadImage(file);
   const photo = await makeThumb(img, img.naturalWidth, img.naturalHeight);
-  const has = gps && typeof gps.latitude === 'number';
+  const place = gps ? L.cleanPlace(gps.latitude, gps.longitude) : null;
   const when = at || file.lastModified || Date.now();
-  return { key: [file.name, file.size, when].join('|'), name: file.name, photo, at: when, atSource: at ? 'exif' : 'file', lat: has ? gps.latitude : undefined, lng: has ? gps.longitude : undefined, source: has ? 'exif' : null, catId: '', include: true };
+  return { key: [file.name, file.size, when].join('|'), name: file.name, photo, at: when, atSource: at ? 'exif' : 'file', lat: place ? place.lat : undefined, lng: place ? place.lng : undefined, source: place ? 'exif' : null, cats: [], include: true };
 }
 
 function Meowmeries() {
@@ -380,45 +434,52 @@ function Meowmeries() {
   const logged = new Set(S.data.sightings.map(s => s.sourceKey).filter(Boolean));
   for (const it of M.items) it.dup = logged.has(it.key);
   const live = M.items.filter(it => it.include && !it.dup);
-  const ready = live.filter(it => it.catId && L.cleanPlace(it.lat, it.lng));
+  const ready = live.filter(it => it.cats.length && it.cats.every(Boolean) && L.cleanPlace(it.lat, it.lng));
   const waiting = live.length - ready.length;
-  const newLabel = id => (M.newCats[id].name.trim() || 'New cat ' + id.split(':')[1]);
-  const options = it => {
-    const base = L.cleanPlace(it.lat, it.lng) ? L.nearest(S.sums, { lat: it.lat, lng: it.lng }) : S.sums.map(e => ({ ...e, distance: Infinity })).sort((a, b) => (b.last || 0) - (a.last || 0));
-    const seen = new Set(base.map(e => e.cat.id));
-    const rest = S.sums.filter(e => !seen.has(e.cat.id));
-    return `<option value="">Which cat?</option>
-      ${Object.keys(M.newCats).map(id => `<option value="${id}" ${it.catId === id ? 'selected' : ''}>New: ${esc(newLabel(id))}</option>`).join('')}
-      ${[...base, ...rest].map(e => `<option value="${esc(e.cat.id)}" ${it.catId === e.cat.id ? 'selected' : ''}>${esc(L.displayName(e.cat))}${isFinite(e.distance) ? ' · ' + L.distWord(e.distance) : ''}</option>`).join('')}
-      <option value="+new">+ New cat</option>`;
+  // New cats in this batch get their numbers in photo order, continuing from the house's highest number.
+  const order = []; for (const it of live) for (const c of it.cats) if (c && c.startsWith('new:') && !order.includes(c)) order.push(c);
+  const numFor = id => S.nextNum + order.indexOf(id);
+  const newLabel = id => M.newCats[id].name.trim() || 'Cat ' + numFor(id);
+  const newMade = () => { const id = 'new:' + M.nextNew++; M.newCats[id] = { name: '' }; return id; };
+  const options = (it, val) => {
+    const place = L.cleanPlace(it.lat, it.lng);
+    const near = place ? L.nearest(S.sums, place) : [];
+    const rest = S.sums.filter(e => !near.some(x => x.cat.id === e.cat.id)).sort((a, b) => (b.last || 0) - (a.last || 0));
+    return `${!val ? '<option value="">Which cat?</option>' : ''}
+      ${Object.keys(M.newCats).filter(id => order.includes(id) || id === val).map(id => `<option value="${id}" ${val === id ? 'selected' : ''}>New: ${esc(newLabel(id))}</option>`).join('')}
+      <option value="+new">+ A different new cat</option>
+      ${[...near, ...rest].map(e => `<option value="${esc(e.cat.id)}" ${val === e.cat.id ? 'selected' : ''}>${esc(L.displayName(e.cat))}${e.distance !== undefined ? ' · ' + L.distWord(e.distance) : ''}</option>`).join('')}`;
   };
   const card = (it, i) => {
     const placed = !!L.cleanPlace(it.lat, it.lng);
-    const isNew = it.catId.startsWith('new:');
     const status = it.dup ? 'Already logged, skipped' : !it.include ? 'Skipped' : placed ? (it.source === 'exif' ? 'Placed from the photo' : 'Placed by hand') : 'No location in this photo';
+    const newInputs = it.cats.filter(c => c && c.startsWith('new:'));
     return `<div class="memcard ${!it.include || it.dup ? 'off' : ''}">
       <div class="memtop"><div class="memthumb" style="background-image:url('${it.photo.data}')"></div>
         <div class="memtxt"><b>${esc(L.longStamp(it.at))}</b><small>${it.atSource === 'exif' ? 'time from the photo' : 'no time in the photo: file date used'}</small>
           <small class="${placed || it.dup || !it.include ? '' : 'warnline'}">${status}</small></div></div>
       ${it.dup ? '' : it.include ? `
-        <div class="memrow"><select class="field memsel" data-i="${i}" aria-label="Which cat is in photo ${i + 1}">${options(it)}</select>
-          <button class="ghost" data-place="${i}">${placed ? 'Move pin' : 'Place it'}</button></div>
-        ${isNew ? `<input class="field" data-newname="${esc(it.catId)}" value="${esc(M.newCats[it.catId].name)}" placeholder="Name the new cat (optional)" aria-label="Name for the new cat">` : ''}
+        ${it.cats.map((v, k) => `<div class="memrow"><select class="field memsel" data-i="${i}" data-k="${k}" aria-label="Cat ${k + 1} in photo ${i + 1}">${options(it, v)}</select>
+          ${k === 0 ? `<button class="ghost" data-place="${i}">${placed ? 'Move pin' : 'Place it'}</button>` : `<button class="ghost" data-dropcat="${i}:${k}" aria-label="Remove this cat">✕</button>`}</div>`).join('')}
+        ${newInputs.map(id => `<input class="field" data-newname="${esc(id)}" value="${esc(M.newCats[id].name)}" placeholder="Name ${esc('Cat ' + numFor(id))} (optional)" aria-label="Name for ${esc('Cat ' + numFor(id))}">`).join('')}
         ${M.placing === i ? `<div class="wheremap"><div id="pmap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="ghost" data-placedone="${i}">Done</button>` : ''}
-        <button class="linkbtn" data-skip="${i}">Skip this photo</button>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
+        <div class="memfoot"><button class="linkbtn" data-addcat="${i}">+ Another cat in this photo</button><button class="linkbtn" data-skip="${i}">Skip this photo</button></div>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
     </div>`;
   };
+  const newCount = order.length;
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="formhead"><button class="back" id="back">${I.back}Back</button><div style="font-size:18px;font-weight:700">MEOWMERIES</div><div style="width:50px"></div></div>
     <div class="pad stack" style="gap:12px;padding-bottom:16px">
-      <label class="addphoto">${I.gallery}<span style="font-size:15px;font-weight:600">${M.items.length ? 'Add more old photos' : 'Pick old photos'}</span><span class="sub" style="font-size:13px">pick several at once</span>
+      <label class="addphoto">${I.gallery}<span style="font-size:15px;font-weight:600">${M.items.length ? 'Add more old photos' : 'Pick old photos'}</span><span class="sub" style="font-size:13px">pick as many as you like</span>
         <input id="mempick" type="file" accept="image/*" multiple aria-label="Pick old photos"></label>
       ${M.busy ? `<div class="note">${esc(M.busy)}</div>` : ''}
-      ${M.items.length ? `<div class="stack8"><div class="label">Who saw these</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-mwho="${p}" class="${M.who === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>` : `<div class="empty">Each photo becomes a sighting at the time and place it was taken.<br>Photos with no location get a pin you place by hand.</div>`}
+      ${M.items.length ? `<div class="stack8"><div class="label">Who saw these</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-mwho="${p}" class="${M.who === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>
+        <div class="sub">Each photo starts as its own new numbered cat. Change any that are a cat you already know; merge duplicates later from a cat's page.</div>`
+        : `<div class="empty">Each photo becomes a sighting at the time and place it was taken.<br>Photos with no location get a pin you place by hand.</div>`}
       ${M.items.map(card).join('')}
     </div></div>
-    ${M.items.length ? `<div class="savebar"><button class="primary" id="memsave" ${ready.length && !waiting && !M.busy ? '' : 'disabled'}>${ready.length ? `Log ${ready.length} sighting${ready.length === 1 ? '' : 's'}` : 'Nothing ready to log'}</button>
-      <div class="note">${waiting ? `${waiting} photo${waiting === 1 ? '' : 's'} still need${waiting === 1 ? 's' : ''} a cat or a place, or skip ${waiting === 1 ? 'it' : 'them'}` : 'Saves to both phones'}</div><div class="err" id="memerr" hidden></div></div>` : ''}`;
+    ${M.items.length ? `<div class="savebar"><button class="primary" id="memsave" ${ready.length && !waiting && !M.busy ? '' : 'disabled'}>${ready.length ? `Log ${ready.length} photo${ready.length === 1 ? '' : 's'}` : 'Nothing ready to log'}</button>
+      <div class="note">${waiting ? `${waiting} photo${waiting === 1 ? '' : 's'} still need${waiting === 1 ? 's' : ''} a place or a cat, or skip ${waiting === 1 ? 'it' : 'them'}` : `Saves to both phones${newCount ? ` · ${newCount} new cat${newCount === 1 ? '' : 's'}` : ''}`}</div></div>` : ''}`;
 
   document.getElementById('back').onclick = () => { if (!M.busy) S.mem = null; go('catflap'); };
   document.getElementById('mempick').onchange = async e => {
@@ -426,7 +487,7 @@ function Meowmeries() {
     let k = 0, failed = 0;
     for (const f of files) {
       M.busy = `Reading ${++k} of ${files.length}…`; render();
-      try { const it = await readOldPhoto(f); if (!M.items.some(x => x.key === it.key)) M.items.push(it); } catch { failed++; }
+      try { const it = await readOldPhoto(f); if (!M.items.some(x => x.key === it.key)) { it.cats = [newMade()]; M.items.push(it); } } catch { failed++; }
     }
     M.items.sort((a, b) => a.at - b.at);
     M.busy = failed ? `${failed} photo${failed === 1 ? '' : 's'} could not be opened here and ${failed === 1 ? 'was' : 'were'} left out.` : null;
@@ -434,11 +495,13 @@ function Meowmeries() {
   };
   for (const b of $app.querySelectorAll('[data-mwho]')) b.onclick = () => { M.who = b.dataset.mwho; render(); };
   for (const s of $app.querySelectorAll('.memsel')) s.onchange = () => {
-    const it = M.items[+s.dataset.i];
-    if (s.value === '+new') { const id = 'new:' + M.nextNew++; M.newCats[id] = { name: '' }; it.catId = id; } else it.catId = s.value;
+    const it = M.items[+s.dataset.i], k = +s.dataset.k;
+    it.cats[k] = s.value === '+new' ? newMade() : s.value;
     render();
   };
   for (const n of $app.querySelectorAll('[data-newname]')) n.onchange = () => { M.newCats[n.dataset.newname].name = n.value; render(); };
+  for (const b of $app.querySelectorAll('[data-addcat]')) b.onclick = () => { M.items[+b.dataset.addcat].cats.push(''); render(); };
+  for (const b of $app.querySelectorAll('[data-dropcat]')) b.onclick = () => { const [i, k] = b.dataset.dropcat.split(':').map(Number); M.items[i].cats.splice(k, 1); render(); };
   for (const b of $app.querySelectorAll('[data-skip]')) b.onclick = () => { const it = M.items[+b.dataset.skip]; it.include = !it.include; if (M.placing === +b.dataset.skip) M.placing = null; render(); };
   for (const b of $app.querySelectorAll('[data-place]')) b.onclick = () => { M.placing = +b.dataset.place; render(); };
   for (const b of $app.querySelectorAll('[data-placedone]')) b.onclick = () => { M.placing = null; render(); };
@@ -447,37 +510,44 @@ function Meowmeries() {
     const start = L.cleanPlace(it.lat, it.lng) || S.pos || lastKnownPlace();
     const pEl = document.getElementById('pmap');
     guardMap(pEl, 'meowmeries map', () => {
-    const m = makeMap(pEl, { attributionControl: false });
-    m.setView(start ? [start.lat, start.lng] : [54.5, -3], start ? 17 : 5);
-    const set = ll => { it.lat = ll.lat; it.lng = ll.lng; it.source = 'manual'; mk.setLatLng(ll); };
-    const mk = window.L.marker(start ? [start.lat, start.lng] : [54.5, -3], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
-    mk.on('dragend', () => set(mk.getLatLng()));
-    m.on('click', ev => set(ev.latlng));
-    if (!start) getPos().then(p => { if (p && M.placing !== null) m.setView([p.lat, p.lng], 17); });
+      const m = makeMap(pEl, { attributionControl: false });
+      m.setView(start ? [start.lat, start.lng] : [54.5, -3], start ? 17 : 5);
+      const mk = window.L.marker(start ? [start.lat, start.lng] : [54.5, -3], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
+      const set = ll => { it.lat = ll.lat; it.lng = ll.lng; it.source = 'manual'; mk.setLatLng(ll); };
+      mk.on('dragend', () => set(mk.getLatLng()));
+      m.on('click', ev => set(ev.latlng));
+      if (!start) getPos().then(p => { if (p && M.placing !== null) m.setView([p.lat, p.lng], 17); });
     });
   }
   const sv = document.getElementById('memsave');
   if (sv) sv.onclick = async () => {
     sv.disabled = true;
-    const er = document.getElementById('memerr');
-    const made = {}; let n = 0;
+    const before = counts();
+    const made = {}; let n = 0, sightings = 0;
     try {
       for (const it of ready) {
         sv.textContent = `Saving ${++n} of ${ready.length}…`;
-        let catId = it.catId;
-        if (catId.startsWith('new:')) {
-          if (!made[catId]) { made[catId] = newId(); await S.store.put('cats', made[catId], { name: M.newCats[catId].name.trim(), coat: '', swatch: L.swatchFor('', made[catId]), markings: '', homeNote: '', favourite: false, createdAt: Date.now(), createdBy: S.me || M.who, thumbPhotoId: null }); }
-          catId = made[catId];
-        }
         const photoId = newId();
-        await S.store.put('photos', photoId, { data: it.photo.data, w: it.photo.w, h: it.photo.h, catId, at: it.at, createdAt: Date.now() });
-        const cat = S.byId.get(catId);
-        if (!cat || !cat.cat.thumbPhotoId || (cat.last !== null && it.at >= cat.last)) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
-        const place = L.cleanPlace(it.lat, it.lng);
-        await S.store.put('sightings', newId(), { catId, at: it.at, lat: place.lat, lng: place.lng, locationSource: it.source, seenBy: M.who, insideOutside: 'outside', petted: false, note: '', photoId, sourceKey: it.key, createdAt: Date.now(), createdBy: S.me || M.who });
+        let photoSaved = false;
+        for (const raw of [...new Set(it.cats)]) {
+          let catId = raw;
+          if (raw.startsWith('new:')) {
+            if (!made[raw]) { made[raw] = newId(); const doc = newCatDoc(made[raw], M.newCats[raw].name, ''); await S.store.put('cats', made[raw], doc); }
+            catId = made[raw];
+          }
+          if (!photoSaved) { await S.store.put('photos', photoId, { data: it.photo.data, w: it.photo.w, h: it.photo.h, catId, at: it.at, createdAt: Date.now() }); photoSaved = true; }
+          const cat = S.byId.get(catId);
+          if (!cat || !photoOk(cat.cat.thumbPhotoId) || (cat.last !== null && it.at >= cat.last)) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
+          const place = L.cleanPlace(it.lat, it.lng);
+          await S.store.put('sightings', newId(), { catId, at: it.at, lat: place.lat, lng: place.lng, locationSource: it.source, seenBy: M.who, insideOutside: 'outside', petted: false, note: '', photoId, sourceKey: it.key, createdAt: Date.now(), createdBy: S.me || M.who });
+          sightings++;
+        }
         it.include = false; it.saved = true;
       }
-      S.mem = null; S.toast = `Logged ${ready.length} old sighting${ready.length === 1 ? '' : 's'} · saved to both phones`; go('catalogue');
+      S.mem = null;
+      S.toast = `Logged ${ready.length} old photo${ready.length === 1 ? '' : 's'} · ${sightings} sighting${sightings === 1 ? '' : 's'} · saved to both phones`;
+      celebrate(before, { cats: Object.keys(made).length, sightings });
+      go('catalogue');
     } catch (x) {
       console.error(x);
       M.items = M.items.filter(it => !it.saved);
@@ -487,36 +557,39 @@ function Meowmeries() {
   };
 }
 
-// ---------- 5. THE CATALOGUE ----------
+// ---------- 5. THE CATALOGUE (two-column grid, Beth's ask 2026-10-03 22:08) ----------
 function Catalogue() {
   const now = Date.now();
   const f = S.filter;
   let list = S.sums.slice();
   if (f === 'fav') list = list.filter(e => e.cat.favourite);
   if (f === 'pet') list = list.filter(e => e.petted > 0);
-  if (f === 'unnamed') list = list.filter(e => !e.cat.name);
+  if (f === 'unnamed') list = list.filter(e => L.isUnnamed(e.cat));
   list.sort((a, b) => (b.last || b.cat.createdAt || 0) - (a.last || a.cat.createdAt || 0));
-  const row = e => {
-    const c = e.cat, unnamed = !c.name;
-    const ls = e.lastSighting;
-    const by = ls && S.me && ls.seenBy !== 'both' && ls.seenBy !== S.me ? `, by ${PERSON[ls.seenBy]}` : '';
-    const m1 = unnamed ? `${e.count} sighting${e.count === 1 ? '' : 's'} · tap to name` : [c.coat, `${e.count} sighting${e.count === 1 ? '' : 's'}`, L.pettedWord(e.petted)].filter(Boolean).join(' · ');
-    return `<a class="catrow" href="#/cat/${esc(c.id)}"><div class="big" style="background-color:${unnamed ? 'var(--moss)' : swatch(c)}"${photoAttr(c)}><span class="ini">${unnamed ? 'NEW' : ''}</span></div>
-      <div class="txt"><div class="nm ${unnamed ? 'grey' : ''}">${esc(L.displayName(c))}</div><div class="m1">${esc(m1)}</div><div class="m2">${e.last ? `${unnamed ? 'Seen' : 'Last seen'} ${L.dayWord(e.last, now)}${esc(by)}` : 'No sightings yet'}</div></div>${I.heart(c.favourite)}</a>`;
+  const card = e => {
+    const c = e.cat, unnamed = L.isUnnamed(c);
+    const meta = `${e.count} sighting${e.count === 1 ? '' : 's'}${e.last ? ' · ' + (unnamed ? 'seen ' : 'last seen ') + L.dayWord(e.last, now) : ''}`;
+    return `<a class="gcard" href="#/cat/${esc(c.id)}"><div class="gimg" style="background-color:${swatch(c)}"${photoAttr(c)}>
+      <span class="ini">${esc(L.initial(c))}</span>${unnamed ? '<span class="newtag">NEW</span>' : ''}<span class="gheart">${I.heart(c.favourite)}</span></div>
+      <div class="gname ${unnamed ? 'grey' : ''}">${esc(L.displayName(c))}</div><div class="gmeta">${esc(meta)}</div></a>`;
   };
+  const binned = S.raw ? S.raw.cats.filter(c => c.deleted || c.mergedInto).length + S.raw.sightings.filter(s => s.deleted || s.photoDeleted).length : 0;
   const F = [['all', 'All'], ['fav', I.heart(true).replace('width="22" height="22"', 'width="14" height="14"') + 'Favourites'], ['pet', 'Petted'], ['unnamed', 'Unnamed']];
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="head" style="flex-direction:column;align-items:stretch"><div style="display:flex;justify-content:space-between;align-items:flex-end"><div class="title">CATALOGUE</div><div class="sub">${S.sums.length} cat${S.sums.length === 1 ? '' : 's'}</div></div>
       <div class="filters">${F.map(([k, t]) => `<button data-f="${k}" class="${f === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
-    <div class="pad">${list.map(row).join('') || `<div class="empty">${S.sums.length ? 'No cats in this list yet.' : 'No cats yet.<br>Tap Pawparazzi to log the first one.'}</div>`}</div>
+    <div class="pad">${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty">${S.sums.length ? 'No cats in this list yet.' : 'No cats yet.<br>Tap Pawparazzi on the Catflap to log the first one.'}</div>`}
+      <a class="binlink" href="#/deleted">🗑️ Recently deleted${binned ? ` (${binned})` : ''}</a></div>
   </div>${nav('catalogue')}`;
   for (const b of $app.querySelectorAll('[data-f]')) b.onclick = () => { S.filter = b.dataset.f; render(); };
 }
 
 // ---------- 6. CATALOGUE ENTRY ----------
+// Each sighting row opens its actions: another cat in this photo, wrong cat, delete the sighting, delete its photo.
+// At the foot: Concatenate (this is the same cat as another) and delete this cat. Every delete is soft and restorable.
 function CatEntry(id) {
   const e = S.byId.get(id);
-  if (!e) { $app.innerHTML = `${banner()}<div class="screen"><div class="setup"><div class="title">Cat not found</div><p>It may still be loading.</p><a class="primary" style="display:flex;align-items:center;justify-content:center" href="#/catalogue">Back to the Catalogue</a></div></div>${nav('catalogue')}`; return; }
+  if (!e) { $app.innerHTML = `${banner()}<div class="screen"><div class="setup"><div class="title">Cat not found</div><p>It may still be loading, or it was deleted or merged. Recently deleted has it if so.</p><a class="primary" style="display:flex;align-items:center;justify-content:center" href="#/catalogue">Back to the Catalogue</a></div></div>${nav('catalogue')}`; return; }
   const c = e.cat, now = Date.now();
   const days = e.first !== null ? Math.max(0, Math.floor((L.startOfDay(now) - L.startOfDay(e.first)) / L.DAY)) : 0;
   const terr = L.territory(e);
@@ -525,6 +598,30 @@ function CatEntry(id) {
     ? `<form class="rename" id="rn"><input id="rnin" class="field" value="${esc(c.name || '')}" placeholder="Name this cat" aria-label="New name"><button type="submit">Save</button></form>`
     : `<div class="nameline"><div class="nm">${esc(L.displayName(c))}</div><button class="pencil" id="pencil" aria-label="Rename this cat">${I.pencil}</button></div>
        <div class="desc">${esc(desc ? desc + ' · ' : '')}tap the pencil to ${c.name ? 'rename' : 'name'}</div>`;
+  const others = S.sums.filter(x => x.cat.id !== id).sort((a, b) => (b.last || 0) - (a.last || 0));
+  const pickList = (attr) => `<div class="picklist">${others.map(x => `<button data-${attr}="${esc(x.cat.id)}"><span class="dot" style="background:${swatch(x.cat)}"${photoAttr(x.cat)}></span>${esc(L.displayName(x.cat))}<small>${x.count} sighting${x.count === 1 ? '' : 's'}</small></button>`).join('')}${attr === 'moveto' ? `<button data-moveto="new"><span class="dot newdot">+</span>New cat (Cat ${S.nextNum})</button>` : ''}</div>`;
+  const row = s => {
+    const open = S.rowOpen === s.id;
+    const hasPhoto = photoOk(s.photoId);
+    return `<div class="srow2"><button class="srowbtn" data-row="${esc(s.id)}" aria-expanded="${open}">
+        ${hasPhoto ? `<span class="sthumb" data-photo="${esc(s.photoId)}"></span>` : ''}
+        <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;text-align:left"><span class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</span>
+        <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
+        <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span></button>
+      ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
+        : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
+        : `<div class="acts">
+          ${!L.hasPin(s) ? `<button class="ghost" data-placesight="${esc(s.id)}">📍 Place it on the map</button>` : ''}
+          ${hasPhoto ? `<button class="ghost" data-another="${esc(s.id)}">+ Another cat in this photo</button>` : ''}
+          <button class="ghost" data-wrong="${esc(s.id)}">Wrong cat: move it</button>
+          <button class="ghost danger" data-delsight="${esc(s.id)}">Delete this sighting</button>
+          ${hasPhoto ? `<button class="ghost danger" data-delphoto="${esc(s.id)}">Delete just the photo</button>` : ''}</div>`) : ''}</div>`;
+  };
+  const foot = S.merging === id
+    ? `<div class="acts"><div class="label">Which cat is really ${esc(L.displayName(c))}? Its sightings move here.</div>${others.length ? pickList('mergein') : '<div class="sub">No other cats to merge.</div>'}<button class="ghost" data-cancel>Cancel</button></div>`
+    : S.confirmDel === id
+      ? `<div class="acts"><div class="label">Delete ${esc(L.displayName(c))} and ${e.count === 1 ? 'its sighting' : 'its ' + e.count + ' sightings'}?</div><div class="sub">It goes to Recently deleted in The Catalogue, where Restore brings it all back.</div><button class="ghost danger" id="delcatyes">Yes, delete ${esc(L.displayName(c))}</button><button class="ghost" data-cancel>Keep it</button></div>`
+      : `<div class="footacts"><button class="ghost" id="merge">🐱 Same cat as another? Merge</button><button class="ghost danger" id="delcat">Delete this cat</button></div>`;
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="hero" style="background-color:${swatch(c)}"${photoAttr(c)}>
       <a class="round lt" style="left:20px" href="#/catalogue" aria-label="Back to Catalogue">${I.back}</a>
@@ -533,32 +630,139 @@ function CatEntry(id) {
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
-    <div class="pad stack8" style="padding-top:16px;padding-bottom:16px"><div class="label">Sightings</div><div>
-      ${e.sightings.map(s => `<div class="srow"><div style="display:flex;flex-direction:column;gap:2px;min-width:0"><div class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</div>
-        <div class="d">${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}</div></div><span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span></div>`).join('') || '<div class="empty">No sightings yet.</div>'}
-    </div></div></div>${nav('catalogue')}`;
+    <div class="pad stack8" style="padding-top:16px"><div class="label">Sightings · tap one for options</div><div>
+      ${e.sightings.map(row).join('') || '<div class="empty">No sightings yet.</div>'}</div></div>
+    <div class="pad" style="padding-top:12px;padding-bottom:20px">${foot}</div></div>${nav('catalogue')}`;
+
   // Buttons are wired FIRST, so nothing the territory map does can leave them dead (live bug 2026-10-03).
   document.getElementById('fav').onclick = () => saveCat(id, { favourite: !c.favourite }, c.favourite ? 'Removed from favourites' : 'Added to favourites');
   const p = document.getElementById('pencil'); if (p) p.onclick = () => { S.renaming = id; render(); const i = document.getElementById('rnin'); i.focus(); i.select(); };
   const rn = document.getElementById('rn');
-  if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : 'Name cleared'); else render(); };
-  // Territory map: only pins with real numbers for both lat and lng, and a failure shows on the map instead of breaking the page.
-  const pts = e.sightings.filter(s => Number.isFinite(s.lat) && Number.isFinite(s.lng)).map(s => [s.lat, s.lng]);
+  if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
+  const sOf = sid => e.sightings.find(x => x.id === sid);
+  for (const b of $app.querySelectorAll('[data-row]')) b.onclick = () => { S.rowOpen = S.rowOpen === b.dataset.row ? null : b.dataset.row; S.moving = null; S.placingSight = null; render(); };
+  for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; render(); };
+  for (const b of $app.querySelectorAll('[data-another]')) b.onclick = () => {
+    const s = sOf(b.dataset.another);
+    S.draft = newDraft({ photoId: s.photoId, lat: s.lat, lng: s.lng, source: s.locationSource || 'manual', at: s.at, seenBy: s.seenBy, inside: s.insideOutside === 'inside', excludeCat: id });
+    S.rowOpen = null; go('repurrt');
+  };
+  for (const b of $app.querySelectorAll('[data-wrong]')) b.onclick = () => { S.moving = b.dataset.wrong; render(); };
+  for (const b of $app.querySelectorAll('[data-placesight]')) b.onclick = () => { S.placingSight = b.dataset.placesight; S.placeAt = null; render(); };
+  const smap = document.getElementById('smap');
+  if (smap) guardMap(smap, 'place sighting map', () => {
+    const start = S.placeAt || (e.sightings.find(L.hasPin)) || S.pos || lastKnownPlace();
+    const m = makeMap(smap, { attributionControl: false });
+    m.setView(start ? [start.lat, start.lng] : [54.5, -3], start ? 17 : 5);
+    const mk = window.L.marker(start ? [start.lat, start.lng] : [54.5, -3], { draggable: true, icon: divIcon('<div class="dragpin"></div>') }).addTo(m);
+    const set = ll => { S.placeAt = { lat: ll.lat, lng: ll.lng }; mk.setLatLng(ll); };
+    mk.on('dragend', () => set(mk.getLatLng())); m.on('click', ev => set(ev.latlng));
+    if (!start) getPos().then(p => { if (p) m.setView([p.lat, p.lng], 17); });
+  });
+  const sp = document.getElementById('saveplace');
+  if (sp) sp.onclick = () => act(async () => {
+    const place = S.placeAt && L.cleanPlace(S.placeAt.lat, S.placeAt.lng);
+    if (!place) return 'Tap or drag the pin to where it was first';
+    await S.store.patch('sightings', S.placingSight, { lat: place.lat, lng: place.lng, locationSource: 'manual', placedAt: Date.now() });
+    S.placingSight = null; S.placeAt = null; S.rowOpen = null;
+    return 'Placed on the map';
+  });
+  for (const b of $app.querySelectorAll('[data-moveto]')) b.onclick = () => act(async () => {
+    let to = b.dataset.moveto;
+    if (to === 'new') { to = newId(); await S.store.put('cats', to, newCatDoc(to, '', '')); }
+    const s = sOf(S.moving);
+    await S.store.patch('sightings', s.id, { catId: to, movedFrom: id, movedAt: Date.now() });
+    if (s.photoId && (S.byId.get(to)?.cat.thumbPhotoId == null)) await S.store.patch('cats', to, { thumbPhotoId: s.photoId });
+    S.moving = null; S.rowOpen = null;
+    return `Moved to ${to === b.dataset.moveto ? L.displayName(S.byId.get(to)?.cat) : 'a new cat'}`;
+  });
+  for (const b of $app.querySelectorAll('[data-delsight]')) b.onclick = () => act(async () => { await S.store.patch('sightings', b.dataset.delsight, { deleted: true, ...stamp() }); S.rowOpen = null; return 'Sighting deleted · Restore it from Recently deleted'; });
+  for (const b of $app.querySelectorAll('[data-delphoto]')) b.onclick = () => act(async () => {
+    const s = sOf(b.dataset.delphoto);
+    await S.store.patch('sightings', s.id, { photoDeleted: true, photoDeletedAt: Date.now(), photoDeletedBy: S.me || 'unknown' });
+    await S.store.patch('photos', s.photoId, { deleted: true, ...stamp() }).catch(() => {});
+    S.rowOpen = null; return 'Photo deleted · Restore it from Recently deleted';
+  });
+  const mg = document.getElementById('merge'); if (mg) mg.onclick = () => { S.merging = id; render(); };
+  for (const b of $app.querySelectorAll('[data-mergein]')) b.onclick = () => act(async () => { const msg = await mergeCats(id, b.dataset.mergein); S.merging = null; return msg; });
+  const dc = document.getElementById('delcat'); if (dc) dc.onclick = () => { S.confirmDel = id; render(); };
+  const dy = document.getElementById('delcatyes'); if (dy) dy.onclick = () => act(async () => { await S.store.patch('cats', id, { deleted: true, ...stamp() }); S.confirmDel = null; go('catalogue'); return `${L.displayName(c)} deleted · Restore it from Recently deleted`; });
+
+  // Territory map: only clean pins, and a failure shows on the map box instead of breaking the page.
+  const pts = e.sightings.filter(L.hasPin).map(s => [s.lat, s.lng]);
   const tmap = document.getElementById('tmap');
   if (!pts.length) { tmap.remove(); return; }
   guardMap(tmap, 'territory map', () => {
     const m = makeMap(tmap, { dragging: false, scrollWheelZoom: false, doubleClickZoom: false, touchZoom: false, boxZoom: false, keyboard: false, attributionControl: false });
     if (pts.length > 1) m.fitBounds(pts, { padding: [24, 24], maxZoom: 18 }); else m.setView(pts[0], 17);
     for (const q of pts) window.L.marker(q, { icon: divIcon(`<div class="minipin" style="background:${swatch(c)}"></div>`), interactive: false }).addTo(m);
-    if (pts.length > 1 && terr.centre && Number.isFinite(terr.centre.lng)) window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m);
+    if (pts.length > 1 && terr.centre) window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m);
   });
 }
 
-// Save a change to a cat and say what happened, including a refusal, instead of failing silently.
-async function saveCat(id, patch, okMsg) {
-  try { await S.store.patch('cats', id, patch); S.toast = okMsg; }
-  catch (x) { console.error('saveCat', x); S.toast = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; }
-  if (route().name === 'cat') render();
+function newCatDoc(id, name, coat) {
+  const n = name.trim();
+  const doc = { name: n, coat: coat || '', swatch: L.swatchFor(coat, id), markings: '', homeNote: '', favourite: false, createdAt: Date.now(), createdBy: S.me || 'unknown', thumbPhotoId: null };
+  if (!n) { doc.num = S.nextNum; S.nextNum++; }
+  return doc;
+}
+
+// Run a change, then say what happened, including a refusal, instead of failing silently.
+async function act(fn) {
+  try { S.toast = await fn(); }
+  catch (x) { console.error('act', x); S.toast = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; }
+  render();
+}
+async function saveCat(id, patch, okMsg) { return act(async () => { await S.store.patch('cats', id, patch); return okMsg; }); }
+
+// CONCATENATE (Job 9): fold `loserId` into `keepId`. Sightings are re-pointed with mergedFrom so it can be undone;
+// the loser is kept as an alias (mergedInto), never deleted. Undo lives in Recently deleted.
+async function mergeCats(keepId, loserId) {
+  const keep = S.byId.get(keepId), lose = S.byId.get(loserId);
+  for (const s of lose.sightings) await S.store.patch('sightings', s.id, { catId: keepId, mergedFrom: loserId });
+  const patch = {};
+  if (L.isUnnamed(keep.cat) && !L.isUnnamed(lose.cat)) patch.name = lose.cat.name;
+  if (!photoOk(keep.cat.thumbPhotoId) && catPhotoId(lose.cat)) patch.thumbPhotoId = catPhotoId(lose.cat);
+  if (!keep.cat.favourite && lose.cat.favourite) patch.favourite = true;
+  patch.aliases = [...(keep.cat.aliases || []), L.displayName(lose.cat)];
+  await S.store.patch('cats', keepId, patch);
+  await S.store.patch('cats', loserId, { mergedInto: keepId, mergedAt: Date.now(), mergedBy: S.me || 'unknown' });
+  return `Merged ${L.displayName(lose.cat)} into ${patch.name || L.displayName(keep.cat)} · Undo it from Recently deleted`;
+}
+async function unmerge(loserId) {
+  const lose = S.raw.cats.find(c => c.id === loserId);
+  for (const s of S.raw.sightings.filter(s => s.mergedFrom === loserId && s.catId === lose.mergedInto)) await S.store.patch('sightings', s.id, { catId: loserId, mergedFrom: null });
+  await S.store.patch('cats', loserId, { mergedInto: null, unmergedAt: Date.now() });
+  return `${L.displayName(lose)} is its own cat again`;
+}
+
+// ---------- RECENTLY DELETED: everything soft-deleted or merged, newest first, each with Restore ----------
+function Deleted() {
+  const R = S.raw || { cats: [], sightings: [] };
+  const catName = id => { const c = R.cats.find(x => x.id === id); return c ? L.displayName(c) : 'a cat'; };
+  const items = [
+    ...R.cats.filter(c => c.deleted).map(c => ({ at: c.deletedAt || 0, kind: 'cat', id: c.id, title: L.displayName(c), line: `Cat deleted ${L.dayWord(c.deletedAt || 0, Date.now())}${c.deletedBy ? ' by ' + (PERSON[c.deletedBy] || c.deletedBy) : ''}, with its sightings`, btn: 'Restore', photo: photoOk(c.thumbPhotoId) ? c.thumbPhotoId : null, sw: swatch(c) })),
+    ...R.cats.filter(c => c.mergedInto && !c.deleted).map(c => ({ at: c.mergedAt || 0, kind: 'merge', id: c.id, title: L.displayName(c), line: `Merged into ${catName(c.mergedInto)} ${L.dayWord(c.mergedAt || 0, Date.now())}`, btn: 'Undo merge', photo: null, sw: swatch(c) })),
+    ...R.sightings.filter(s => s.deleted).map(s => ({ at: s.deletedAt || 0, kind: 'sighting', id: s.id, title: catName(s.catId), line: `Sighting of ${L.longStamp(s.at)} deleted`, btn: 'Restore', photo: s.photoId && !s.photoDeleted ? s.photoId : null, sw: '#8A8F99' })),
+    ...R.sightings.filter(s => s.photoDeleted).map(s => ({ at: s.photoDeletedAt || 0, kind: 'photo', id: s.id, pid: s.photoId, title: catName(s.catId), line: `Photo from ${L.longStamp(s.at)} deleted`, btn: 'Restore photo', photo: null, sw: '#C9C5BA' })),
+  ].sort((a, b) => b.at - a.at);
+  $app.innerHTML = `${banner()}<div class="screen">
+    <div class="formhead"><a class="back" href="#/catalogue">${I.back}Catalogue</a><div style="font-size:18px;font-weight:700">RECENTLY DELETED</div><div style="width:50px"></div></div>
+    <div class="pad stack8" style="padding-bottom:20px">
+      <div class="sub">Nothing here is gone. Restore puts it back for both phones.</div>
+      ${items.map((it, i) => `<div class="drow"><div class="dthumb" style="background-color:${it.sw}"${it.photo ? ` data-photo="${esc(it.photo)}"` : ''}></div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><b>${esc(it.title)}</b><small>${esc(it.line)}</small></div>
+        <button class="ghost" data-restore="${i}">${it.btn}</button></div>`).join('') || '<div class="empty">Nothing deleted.</div>'}
+    </div></div>${nav('catalogue')}`;
+  for (const b of $app.querySelectorAll('[data-restore]')) b.onclick = () => act(async () => {
+    const it = items[+b.dataset.restore];
+    if (it.kind === 'cat') { await S.store.patch('cats', it.id, { deleted: false, restoredAt: Date.now() }); return `${it.title} restored`; }
+    if (it.kind === 'merge') return unmerge(it.id);
+    if (it.kind === 'sighting') { await S.store.patch('sightings', it.id, { deleted: false, restoredAt: Date.now() }); return 'Sighting restored'; }
+    await S.store.patch('sightings', it.id, { photoDeleted: false, restoredAt: Date.now() });
+    if (it.pid) await S.store.patch('photos', it.pid, { deleted: false }).catch(() => {});
+    return 'Photo restored';
+  });
 }
 
 // ---------- 7. MEOWMENTUM ----------
@@ -639,6 +843,12 @@ async function boot() {
   S.store.subscribe((d, err) => {
     if (err) { S.error = err.code || err.message; render(); return; }
     S.error = null; setData(d);
+    // One-off per session: cats logged before numbering existed get the next numbers, oldest first, so no card says "Unnamed".
+    if (!S.backfilled) {
+      S.backfilled = true;
+      const todo = S.data.cats.filter(c => L.isUnnamed(c) && !c.num).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+      (async () => { for (const c of todo) { try { await S.store.patch('cats', c.id, { num: S.nextNum++ }); } catch (x) { console.warn('number backfill', x); } } })();
+    }
     const r = route().name;
     // Don't redraw a form or the camera under someone's thumb; they pick up new data on their next screen.
     if (first || !['repurrt', 'camera', 'meowmeries'].includes(r) && !S.renaming) render();

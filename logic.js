@@ -33,8 +33,11 @@ export function swatchFor(coat, id = '') {
   return FALLBACK[h % FALLBACK.length];
 }
 
-export function displayName(cat) { return (cat && cat.name && cat.name.trim()) || 'Unnamed'; }
-export function initial(cat) { const n = cat && cat.name && cat.name.trim(); return n ? n[0].toUpperCase() : '+'; }
+// A cat with no name shows its running number ("Cat 12"); every new unnamed cat is given the next number.
+export function displayName(cat) { const n = cat && cat.name && cat.name.trim(); return n || (cat && cat.num ? 'Cat ' + cat.num : 'Unnamed'); }
+export function initial(cat) { const n = cat && cat.name && cat.name.trim(); return n ? n[0].toUpperCase() : (cat && cat.num ? String(cat.num) : '+'); }
+export function isUnnamed(cat) { return !(cat && cat.name && cat.name.trim()); }
+export function nextNum(allCats) { return allCats.reduce((m, c) => Math.max(m, Number(c.num) || 0), 0) + 1; }
 
 // One summary per cat, built from the whole log.
 export function summarise(cats, sightings) {
@@ -175,3 +178,53 @@ export function longStamp(t) { const d = new Date(t); return WD[d.getDay()] + ' 
 export function shortDay(t) { const d = new Date(t); return WD[d.getDay()] + ' ' + d.getDate(); }
 export function distWord(m) { return m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km'; }
 export function pettedWord(n) { return n === 0 ? 'never petted' : n === 1 ? 'petted once' : 'petted ' + n + ' times'; }
+
+// Days in a row with at least one sighting by either of you, counting back from today (or from yesterday,
+// so the streak is not shown as broken before anyone has been out today).
+export function streak(sightings, now) {
+  const days = new Set(sightings.map(s => dayKey(s.at)));
+  let d = startOfDay(now);
+  if (!days.has(dayKey(d))) d = startOfDay(d - DAY / 2);
+  let n = 0;
+  while (days.has(dayKey(d))) { n++; d = startOfDay(d - DAY / 2); }
+  return n;
+}
+
+// Milestones crossed between two counts, as toast lines.
+const CAT_MARKS = [10, 25, 50, 100, 250], SIGHT_MARKS = [50, 100, 250, 500, 1000];
+export function milestones(before, after) {
+  const out = [];
+  for (const m of CAT_MARKS) if (before.cats < m && after.cats >= m) out.push(`🎉 Your ${m}th cat in The Catalogue!`);
+  for (const m of SIGHT_MARKS) if (before.sightings < m && after.sightings >= m) out.push(`🎉 ${m} sightings logged!`);
+  return out;
+}
+
+// FURCAST: which cat is likeliest near here at this time of day, plus the best slots from the whole log.
+const minuteOfDay = t => { const d = new Date(t); return d.getHours() * 60 + d.getMinutes(); };
+const circMin = (a, b) => { const x = Math.abs(a - b) % 1440; return Math.min(x, 1440 - x); };
+function bestSlot(sightings, fromMin, toMin) {
+  const b = new Map();
+  for (const s of sightings) { const m = minuteOfDay(s.at); if (m >= fromMin && m < toMin) { const k = Math.floor(m / 30) * 30; b.set(k, (b.get(k) || 0) + 1); } }
+  let best = null;
+  for (const [k, n] of b) if (!best || n > best.n || (n === best.n && k < best.k)) best = { k, n };
+  return best ? String(Math.floor(best.k / 60)).padStart(2, '0') + ':' + String(best.k % 60).padStart(2, '0') : null;
+}
+export function furcast(summaries, pos, now) {
+  const all = summaries.flatMap(e => e.sightings);
+  const wd = [0, 0, 0, 0, 0, 0, 0];
+  for (const s of all) wd[new Date(s.at).getDay()]++;
+  const top = Math.max(...wd);
+  const slots = { morning: bestSlot(all, 300, 720), evening: bestSlot(all, 1020, 1380), busiest: top > 0 ? WD[wd.indexOf(top)] : null };
+  const hm = t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  const window = hm(now - 90 * 60000) + ' and ' + hm(now + 90 * 60000);
+  if (!pos) return { slots, pick: null, window, total: all.length };
+  const nowMin = minuteOfDay(now);
+  let pick = null;
+  for (const e of summaries) {
+    const near = e.sightings.filter(s => hasPin(s) && metres(pos, s) <= 150);
+    const nearAndTime = near.filter(s => circMin(minuteOfDay(s.at), nowMin) <= 90);
+    const score = nearAndTime.length * 3 + near.length;
+    if (score > 0 && (!pick || score > pick.score)) pick = { cat: e.cat, score, near: near.length, nearAndTime: nearAndTime.length, total: e.count };
+  }
+  return { slots, pick, window, total: all.length };
+}

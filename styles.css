@@ -211,3 +211,62 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .hero .nm { min-width: 0; overflow-wrap: anywhere; }
 .mapfail { position: absolute; inset: 0; z-index: 800; display: flex; align-items: center; justify-content: center; text-align: center; padding: 16px; background: var(--map); color: var(--ink); font-size: 13px; font-weight: 600; }
 .crash { position: fixed; left: 8px; right: 8px; top: calc(8px + env(safe-area-inset-top, 0px)); z-index: 2000; background: var(--ginger); color: #FFFFFF; border-radius: 12px; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+
+/* Catflap v2 (approved 2026-10-03 22:27): streak, three log cards in the Meowmeries card style, stat strip, latest strip, nudge, Furcast */
+.hint { font-size: 14px; color: var(--caption); background: var(--surface); border-radius: 12px; padding: 10px 12px; }
+.streak { font-size: 14px; font-weight: 600; }
+.logs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tile.logc { padding: 12px; min-height: 96px; }
+.tile.logc b { font-size: 14px; }
+.tile.logc small { font-size: 11px; }
+.statrow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.st { background: var(--surface); border-radius: 14px; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.st span { font-size: 18px; line-height: 1; }
+.st b { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.st small { font-size: 11px; color: var(--caption); line-height: 1.2; }
+.latest { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; scroll-snap-type: x proximity; }
+.lcard { flex: 0 0 auto; width: 64px; display: flex; flex-direction: column; gap: 3px; scroll-snap-align: start; }
+.lface { width: 64px; height: 64px; border-radius: 14px; background-size: cover; background-position: center; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-weight: 700; }
+.lcard b { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lcard small { font-size: 11px; color: var(--caption); }
+.nudge { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--moss-pale); color: var(--moss); border-radius: 14px; padding: 12px 14px; font-size: 14px; font-weight: 600; }
+.furcast { background: var(--moss-pale); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.furcast .fk { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 700; letter-spacing: 0.6px; color: var(--moss); }
+.furcast .fline { font-size: 15px; line-height: 1.35; color: var(--ink); }
+.fslots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.fslots > div { background: var(--ground); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+.fslots b { font-size: 18px; font-weight: 700; color: var(--ink); }
+.fslots small { font-size: 11px; color: var(--caption); }
+
+/* The Catalogue as a two-column grid */
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 12px; padding-top: 4px; }
+.gcard { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.gimg { position: relative; aspect-ratio: 1 / 1; max-width: 100%; border-radius: 16px; background-size: cover; background-position: center; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 30px; font-weight: 700; }
+.newtag { position: absolute; left: 8px; top: 8px; background: var(--moss); color: #FFFFFF; font-size: 10px; font-weight: 700; padding: 3px 7px; border-radius: 8px; letter-spacing: 0.4px; }
+.gheart { position: absolute; right: 6px; top: 6px; width: 32px; height: 32px; border-radius: 16px; background: rgba(255,255,255,0.9); display: flex; align-items: center; justify-content: center; }
+.gheart svg { width: 18px; height: 18px; }
+.gname { font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gname.grey { color: var(--caption); }
+.gmeta { font-size: 12px; color: var(--caption); }
+.binlink { display: block; text-align: center; padding: 20px 0 8px; font-size: 13px; color: var(--caption); }
+
+/* Cat page: sighting actions, merge, delete */
+.srow2 { border-bottom: 1px solid var(--row); }
+.srowbtn { width: 100%; display: flex; align-items: center; gap: 10px; padding: 12px 0; background: none; border: 0; text-align: left; }
+.srowbtn .t { font-size: 15px; font-weight: 600; }
+.srowbtn .d { font-size: 13px; color: var(--caption); }
+.sthumb { width: 44px; height: 44px; border-radius: 10px; flex: 0 0 auto; background: var(--surface) center / cover; }
+.acts { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 12px; }
+.ghost.danger { color: var(--ginger); }
+.picklist { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+.picklist button { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--ground); font-size: 15px; font-weight: 600; text-align: left; }
+.picklist button small { margin-left: auto; font-size: 12px; color: var(--caption); font-weight: 400; }
+.picklist .dot { width: 28px; height: 28px; background-size: cover; background-position: center; }
+.newdot { border: 2px dashed #8A8F99; display: flex; align-items: center; justify-content: center; color: var(--caption); }
+.footacts { display: flex; flex-direction: column; gap: 8px; }
+
+/* Recently deleted */
+.drow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--row); }
+.drow small { font-size: 12px; color: var(--caption); }
+.dthumb { width: 48px; height: 48px; border-radius: 12px; flex: 0 0 auto; background-size: cover; background-position: center; }
+.memfoot { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

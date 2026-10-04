@@ -236,7 +236,7 @@ function catPinHtml(cat, label, home) {
 }
 function householdHtml(cats) {
   const faces = cats.slice(0, 3).map(e => { const pid = catPhotoId(e.cat); return `<i style="background-color:${swatch(e.cat)};border-color:${swatch(e.cat)}"${pid ? ` data-photo="${esc(pid)}"` : ''}><em class="ini">${esc(L.initial(e.cat))}</em></i>`; }).join('');
-  return `<div class="pin house"><div class="stackfaces">${faces}</div><b class="hb">🏠</b><span>Household (${cats.length})</span></div>`;
+  return `<div class="pin house"><div class="stackfaces">${faces}</div><b class="hb">🏠</b><b class="hcount">${cats.length}</b><span>Household (${cats.length})</span></div>`;
 }
 function MeowMap() {
   const n = S.sums.filter(e => e.count).length;

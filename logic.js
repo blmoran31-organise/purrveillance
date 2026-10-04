@@ -342,33 +342,13 @@ export function spread(points, pad = 4) {
     g++;
   }
   const movable = i => group[i] >= 0;
-  // 2. Each group is laid out tightly round its shared centre: two side by side, more on the smallest ring or
-  //    sunflower spiral that clears, and each marker takes the slot nearest its true direction from the centre.
-  const groups = new Map();
-  for (let i = 0; i < n; i++) if (movable(i)) { if (!groups.has(group[i])) groups.set(group[i], []); groups.get(group[i]).push(i); }
-  for (const ids of groups.values()) {
-    const cx = ids.reduce((t, i) => t + points[i].x, 0) / ids.length, cy = ids.reduce((t, i) => t + points[i].y, 0) / ids.length;
-    const d = 2 * Math.max(...ids.map(i => P[i].r)) + pad;
-    const k = ids.length;
-    let slots;
-    if (k <= 7) {
-      const R = k === 1 ? 0 : (d / 2) / Math.sin(Math.PI / k);
-      slots = Array.from({ length: k }, (_, m) => ({ x: cx + R * Math.cos(2 * Math.PI * m / k), y: cy + R * Math.sin(2 * Math.PI * m / k) }));
-    } else {
-      const c = d * 0.62; // sunflower spacing that keeps neighbours about d apart
-      slots = Array.from({ length: k }, (_, m) => { const rr = c * Math.sqrt(m + 0.5), t = m * 2.39996; return { x: cx + rr * Math.cos(t), y: cy + rr * Math.sin(t) }; });
-    }
-    // Nearest-slot assignment: markers furthest from the centre choose first.
-    const order = ids.slice().sort((a, b) => Math.hypot(points[b].x - cx, points[b].y - cy) - Math.hypot(points[a].x - cx, points[a].y - cy));
-    const free = slots.slice();
-    for (const i of order) {
-      let best = 0, bd = Infinity;
-      free.forEach((sl, m) => { const dd = Math.hypot(sl.x - points[i].x, sl.y - points[i].y); if (dd < bd) { bd = dd; best = m; } });
-      P[i].x = free[best].x; P[i].y = free[best].y; free.splice(best, 1);
-    }
-  }
+  // 2. Overlapping markers start on their true spots; markers on the very same spot fan out a hair so they have a
+  //    direction to separate in. Step 3 then pushes apart only what touches, which keeps every nudge small.
+  const at = new Map();
+  for (let i = 0; i < n; i++) if (movable(i)) { const k = P[i].x.toFixed(2) + ',' + P[i].y.toFixed(2); at.set(k, (at.get(k) || []).concat(i)); }
+  for (const ids of at.values()) if (ids.length > 1) ids.forEach((i, m) => { const t = 2 * Math.PI * m / ids.length; P[i].x += Math.cos(t) * 0.5; P[i].y += Math.sin(t) * 0.5; });
   // 3. Clear any leftover contact. Fixed markers never move; a moved marker that touches one is pushed off it.
-  for (let round = 0; round < 300; round++) {
+  for (let round = 0; round < 600; round++) {
     let moved = false;
     for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
       if (!movable(i) && !movable(j)) continue;

@@ -280,13 +280,21 @@ function MeowMap() {
         placed.push({ marker: mk, at: [p.lat, p.lng], r: 24 });
       });
     }
-    // Lay crowded pins out side by side, now and at every zoom, so a tap always lands on one cat.
+    // Every pin sits on its true spot unless it overlaps another; only those are nudged apart, each with a thin
+    // line back to where the cat really was. Re-run at every zoom, so zooming in returns pins to their spots.
+    const leaders = window.L.layerGroup().addTo(m);
     const layout = () => guardMap(null, 'pin layout', () => {
+      leaders.clearLayers();
       const pts = placed.map(x => m.latLngToLayerPoint(x.at));
       const out = L.spread(pts.map((p, i) => ({ x: p.x, y: p.y, r: placed[i].r })));
       placed.forEach((x, i) => {
-        x.marker.setLatLng(out[i].crowded ? m.layerPointToLatLng(window.L.point(out[i].x, out[i].y)) : x.at);
-        const el = x.marker.getElement(); if (el) el.classList.toggle('crowded', out[i].crowded);
+        if (out[i].moved) {
+          const ll = m.layerPointToLatLng(window.L.point(out[i].x, out[i].y));
+          x.marker.setLatLng(ll);
+          window.L.polyline([x.at, ll], { color: '#17181C', weight: 1.5, opacity: 0.55, interactive: false }).addTo(leaders);
+          window.L.circleMarker(x.at, { radius: 3, color: '#FFFFFF', weight: 1.5, fillColor: '#17181C', fillOpacity: 0.9, interactive: false }).addTo(leaders);
+        } else x.marker.setLatLng(x.at);
+        const el = x.marker.getElement(); if (el) el.classList.toggle('crowded', out[i].moved);
       });
     });
     layout();

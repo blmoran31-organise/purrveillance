@@ -318,26 +318,71 @@ export function households(summaries, within = 25) {
   return groups.map(gr => ({ cats: gr.map(x => x.e), lat: gr.reduce((s, x) => s + x.h.lat, 0) / gr.length, lng: gr.reduce((s, x) => s + x.h.lng, 0) / gr.length }));
 }
 
-// Spread markers that would sit on top of each other. Each point is {x, y, r} in pixels (r = half its width; a
-// household is wider). Any two closer than r1 + r2 + pad push apart, a few rounds, so a pin moved out of one crowd
-// cannot land on a third marker. Exact duplicates start on a small ring. Returns {x, y, crowded} per point.
-export function spread(points, pad = 6, rounds = 400) {
+// Marker layout (Beth 2026-10-04 01:33): a marker sits EXACTLY on its true point unless its circle overlaps another.
+// Only overlapping markers move, by the smallest nudge that clears the overlap, clustered round their shared spot;
+// every other marker is a fixed obstacle and never moves. Run per zoom, so once markers stop overlapping they are
+// back on their true points. Points are {x, y, r} in pixels (r = half the marker's width).
+// Returns {x, y, moved} per point. Markers on the very same coordinates overlap at every zoom and stay a small cluster.
+export function spread(points, pad = 4) {
+  const n = points.length;
   const P = points.map(p => ({ x: p.x, y: p.y, r: p.r || 23 }));
-  const key = p => Math.round(p.x) + ',' + Math.round(p.y), dup = new Map();
-  P.forEach((p, i) => { const k = key(p); if (!dup.has(k)) dup.set(k, []); dup.get(k).push(i); });
-  for (const ids of dup.values()) if (ids.length > 1) ids.forEach((i, n) => { const t = 2 * Math.PI * n / ids.length; P[i].x += Math.cos(t) * 4; P[i].y += Math.sin(t) * 4; });
-  for (let round = 0; round < rounds; round++) {
+  const need = (i, j) => P[i].r + P[j].r + pad;
+  const overlaps = (i, j) => Math.hypot(points[i].x - points[j].x, points[i].y - points[j].y) < need(i, j);
+  // 1. Which markers overlap at all, and in which groups (overlap is chained: A on B on C is one group).
+  const group = new Array(n).fill(-1); let g = 0;
+  for (let i = 0; i < n; i++) {
+    if (group[i] !== -1) continue;
+    const stack = [i], members = []; let any = false;
+    group[i] = g;
+    while (stack.length) {
+      const k = stack.pop(); members.push(k);
+      for (let j = 0; j < n; j++) if (j !== k && overlaps(k, j)) { any = true; if (group[j] === -1) { group[j] = g; stack.push(j); } }
+    }
+    if (!any) group[i] = -2; // touches nothing: fixed at its true point
+    g++;
+  }
+  const movable = i => group[i] >= 0;
+  // 2. Each group is laid out tightly round its shared centre: two side by side, more on the smallest ring or
+  //    sunflower spiral that clears, and each marker takes the slot nearest its true direction from the centre.
+  const groups = new Map();
+  for (let i = 0; i < n; i++) if (movable(i)) { if (!groups.has(group[i])) groups.set(group[i], []); groups.get(group[i]).push(i); }
+  for (const ids of groups.values()) {
+    const cx = ids.reduce((t, i) => t + points[i].x, 0) / ids.length, cy = ids.reduce((t, i) => t + points[i].y, 0) / ids.length;
+    const d = 2 * Math.max(...ids.map(i => P[i].r)) + pad;
+    const k = ids.length;
+    let slots;
+    if (k <= 7) {
+      const R = k === 1 ? 0 : (d / 2) / Math.sin(Math.PI / k);
+      slots = Array.from({ length: k }, (_, m) => ({ x: cx + R * Math.cos(2 * Math.PI * m / k), y: cy + R * Math.sin(2 * Math.PI * m / k) }));
+    } else {
+      const c = d * 0.62; // sunflower spacing that keeps neighbours about d apart
+      slots = Array.from({ length: k }, (_, m) => { const rr = c * Math.sqrt(m + 0.5), t = m * 2.39996; return { x: cx + rr * Math.cos(t), y: cy + rr * Math.sin(t) }; });
+    }
+    // Nearest-slot assignment: markers furthest from the centre choose first.
+    const order = ids.slice().sort((a, b) => Math.hypot(points[b].x - cx, points[b].y - cy) - Math.hypot(points[a].x - cx, points[a].y - cy));
+    const free = slots.slice();
+    for (const i of order) {
+      let best = 0, bd = Infinity;
+      free.forEach((sl, m) => { const dd = Math.hypot(sl.x - points[i].x, sl.y - points[i].y); if (dd < bd) { bd = dd; best = m; } });
+      P[i].x = free[best].x; P[i].y = free[best].y; free.splice(best, 1);
+    }
+  }
+  // 3. Clear any leftover contact. Fixed markers never move; a moved marker that touches one is pushed off it.
+  for (let round = 0; round < 300; round++) {
     let moved = false;
-    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
-      const a = P[i], b = P[j], need = a.r + b.r + pad;
-      let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
-      if (d >= need) continue;
-      if (d < 0.01) { dx = 1; dy = 0; d = 1; }
-      const push = (need - d) / 2 + 0.5;
-      a.x -= dx / d * push; a.y -= dy / d * push; b.x += dx / d * push; b.y += dy / d * push;
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+      if (!movable(i) && !movable(j)) continue;
+      let dx = P[j].x - P[i].x, dy = P[j].y - P[i].y, dist = Math.hypot(dx, dy);
+      const want = need(i, j);
+      if (dist >= want) continue;
+      if (dist < 0.01) { dx = 1; dy = 0; dist = 1; }
+      const gap = want - dist + 0.1;
+      if (movable(i) && movable(j)) { P[i].x -= dx / dist * gap / 2; P[i].y -= dy / dist * gap / 2; P[j].x += dx / dist * gap / 2; P[j].y += dy / dist * gap / 2; }
+      else if (movable(i)) { P[i].x -= dx / dist * gap; P[i].y -= dy / dist * gap; }
+      else { P[j].x += dx / dist * gap; P[j].y += dy / dist * gap; }
       moved = true;
     }
     if (!moved) break;
   }
-  return P.map((p, i) => ({ x: p.x, y: p.y, crowded: Math.hypot(p.x - points[i].x, p.y - points[i].y) > 2 }));
+  return P.map((p, i) => movable(i) ? { x: p.x, y: p.y, moved: true } : { x: points[i].x, y: points[i].y, moved: false });
 }

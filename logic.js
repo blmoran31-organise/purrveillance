@@ -321,7 +321,7 @@ export function households(summaries, within = 25) {
 // Spread markers that would sit on top of each other. Each point is {x, y, r} in pixels (r = half its width; a
 // household is wider). Any two closer than r1 + r2 + pad push apart, a few rounds, so a pin moved out of one crowd
 // cannot land on a third marker. Exact duplicates start on a small ring. Returns {x, y, crowded} per point.
-export function spread(points, pad = 6, rounds = 40) {
+export function spread(points, pad = 6, rounds = 400) {
   const P = points.map(p => ({ x: p.x, y: p.y, r: p.r || 23 }));
   const key = p => Math.round(p.x) + ',' + Math.round(p.y), dup = new Map();
   P.forEach((p, i) => { const k = key(p); if (!dup.has(k)) dup.set(k, []); dup.get(k).push(i); });

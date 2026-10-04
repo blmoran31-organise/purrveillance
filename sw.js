@@ -1,7 +1,7 @@
 // PURRVEILLANCE service worker: lets the app install to the home screen and opens the shell without signal.
 // Network first for everything on this site, cached copy as the fallback. Data never goes through here.
-const CACHE = 'purrveillance-v2';
-const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'config.js', 'manifest.json', 'icons/icon-192.png'];
+const CACHE = 'purrveillance-v3';
+const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'logic.js', 'store.js', 'names.js', 'config.js', 'manifest.json', 'icons/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', e => {

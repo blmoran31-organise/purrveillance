@@ -263,3 +263,81 @@ export function furcast(summaries, pos, now) {
   }
   return { slots, pick, window, total: all.length };
 }
+
+// FRIENDS (Beth 2026-10-04: "photographed together ... we can reasonably assume those cats are friends").
+// Two cats are friends when they share a photo, or were logged within 10 minutes and 50 m of each other.
+// A pair either cat has marked "not friends" (cat.notFriends) is left out. Returns Map catId -> Map otherId -> {why, n}.
+export function friendGraph(summaries) {
+  const g = new Map(), byId = new Map(summaries.map(e => [e.cat.id, e.cat]));
+  const blocked = (a, b) => (byId.get(a)?.notFriends || []).includes(b) || (byId.get(b)?.notFriends || []).includes(a);
+  const link = (a, b, why) => {
+    if (a === b || blocked(a, b)) return;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      if (!g.has(x)) g.set(x, new Map());
+      const cur = g.get(x).get(y) || { why, n: 0 };
+      cur.n++; if (why === 'same photo') cur.why = why;
+      g.get(x).set(y, cur);
+    }
+  };
+  const all = summaries.flatMap(e => e.sightings);
+  const byPhoto = new Map();
+  for (const s of all) if (s.photoId) { if (!byPhoto.has(s.photoId)) byPhoto.set(s.photoId, new Set()); byPhoto.get(s.photoId).add(s.catId); }
+  for (const cats of byPhoto.values()) { const c = [...cats]; for (let i = 0; i < c.length; i++) for (let j = i + 1; j < c.length; j++) link(c[i], c[j], 'same photo'); }
+  const pinned = all.filter(hasPin).sort((a, b) => a.at - b.at);
+  for (let i = 0; i < pinned.length; i++) for (let j = i + 1; j < pinned.length && pinned[j].at - pinned[i].at <= 10 * 60000; j++) {
+    const a = pinned[i], b = pinned[j];
+    if (a.catId !== b.catId && !(a.photoId && a.photoId === b.photoId) && metres(a, b) <= 50) link(a.catId, b.catId, 'seen together');
+  }
+  return g;
+}
+
+// LOOKALIKES: other cats with the same coat (same set of colours, and both set) seen within 300 m of this one.
+export function lookalikes(summaries, id) {
+  const me = summaries.find(e => e.cat.id === id); if (!me) return [];
+  const key = c => [...coatsOf(c)].sort().join('+');
+  const k = key(me.cat); if (!k) return [];
+  const mine = me.sightings.filter(hasPin);
+  const out = [];
+  for (const e of summaries) {
+    if (e.cat.id === id || key(e.cat) !== k) continue;
+    let best = Infinity;
+    for (const a of mine) for (const b of e.sightings) if (hasPin(b)) best = Math.min(best, metres(a, b));
+    if (best <= 300) out.push({ ...e, distance: best });
+  }
+  return out.sort((a, b) => a.distance - b.distance);
+}
+
+// HOUSEHOLDS: cats whose homes are within 25 m of each other share one map marker.
+export function households(summaries, within = 25) {
+  const homes = summaries.map(e => ({ e, h: homeOf(e) })).filter(x => x.h);
+  const groups = [];
+  for (const x of homes) {
+    const g = groups.find(gr => gr.some(y => metres(y.h, x.h) <= within));
+    if (g) g.push(x); else groups.push([x]);
+  }
+  return groups.map(gr => ({ cats: gr.map(x => x.e), lat: gr.reduce((s, x) => s + x.h.lat, 0) / gr.length, lng: gr.reduce((s, x) => s + x.h.lng, 0) / gr.length }));
+}
+
+// Spread markers that would sit on top of each other. Each point is {x, y, r} in pixels (r = half its width; a
+// household is wider). Any two closer than r1 + r2 + pad push apart, a few rounds, so a pin moved out of one crowd
+// cannot land on a third marker. Exact duplicates start on a small ring. Returns {x, y, crowded} per point.
+export function spread(points, pad = 6, rounds = 40) {
+  const P = points.map(p => ({ x: p.x, y: p.y, r: p.r || 23 }));
+  const key = p => Math.round(p.x) + ',' + Math.round(p.y), dup = new Map();
+  P.forEach((p, i) => { const k = key(p); if (!dup.has(k)) dup.set(k, []); dup.get(k).push(i); });
+  for (const ids of dup.values()) if (ids.length > 1) ids.forEach((i, n) => { const t = 2 * Math.PI * n / ids.length; P[i].x += Math.cos(t) * 4; P[i].y += Math.sin(t) * 4; });
+  for (let round = 0; round < rounds; round++) {
+    let moved = false;
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      const a = P[i], b = P[j], need = a.r + b.r + pad;
+      let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
+      if (d >= need) continue;
+      if (d < 0.01) { dx = 1; dy = 0; d = 1; }
+      const push = (need - d) / 2 + 0.5;
+      a.x -= dx / d * push; a.y -= dy / d * push; b.x += dx / d * push; b.y += dy / d * push;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return P.map((p, i) => ({ x: p.x, y: p.y, crowded: Math.hypot(p.x - points[i].x, p.y - points[i].y) > 2 }));
+}

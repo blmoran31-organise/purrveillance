@@ -3,6 +3,7 @@
 
 import * as L from './logic.js';
 import { openStore, configured, newId, newHouseCode } from './store.js';
+import { randomName } from './names.js';
 
 const $app = document.getElementById('app');
 const params = new URLSearchParams(location.search);
@@ -64,6 +65,7 @@ function setData(d) {
   S.nextNum = L.nextNum(d.cats);
   S.data = { cats, sightings }; S.sums = L.summarise(cats, sightings);
   S.byId = new Map(S.sums.map(e => [e.cat.id, e]));
+  S.friends = L.friendGraph(S.sums);
 }
 function swatch(cat) { return cat.swatch || L.swatchFor(cat.coat, cat.id); }
 function photoOk(id) { return !!id && !(S.hiddenPhotos && S.hiddenPhotos.has(id)); }
@@ -85,8 +87,12 @@ async function hydratePhotos(root = $app) {
 // cat. Once someone taps the cat ("Tap the cat"), every crop of that photo fills the square, centred on that point.
 function cropStyle(el, p) {
   el.style.backgroundRepeat = 'no-repeat';
-  if (Number.isFinite(p.fx) && Number.isFinite(p.fy)) { el.style.backgroundSize = 'cover'; el.style.backgroundPosition = `${p.fx}% ${p.fy}%`; }
-  else { el.style.backgroundSize = 'contain'; el.style.backgroundPosition = 'center'; }
+  if (Number.isFinite(p.fx) && Number.isFinite(p.fy)) {
+    // The same maths as the crop editor, so every box shows what was chosen there (cover, times the saved zoom).
+    const r = el.getBoundingClientRect(), z = Number.isFinite(p.zoom) ? p.zoom : 1, ar = (p.w || 1) / (p.h || 1);
+    el.style.backgroundSize = r.width && r.height ? `${Math.max(r.width, r.height * ar) * z}px auto` : 'cover';
+    el.style.backgroundPosition = `${p.fx}% ${p.fy}%`;
+  } else { el.style.backgroundSize = 'contain'; el.style.backgroundPosition = 'center'; }
 }
 function counts() { return { cats: S.data.cats.length, sightings: S.data.sightings.length }; }
 // After a save, a crossed milestone replaces the plain toast.
@@ -141,13 +147,14 @@ function render() {
   killMaps();
   if (r.name !== 'camera') stopCamera();
   if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted };
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
   finally {
     if (S.toast) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = S.toast; $app.appendChild(t); const msg = S.toast; setTimeout(() => { if (S.toast === msg) { S.toast = null; t.remove(); } }, 4000); }
     hydratePhotos();
+    wireDice();
   }
 }
 
@@ -217,6 +224,20 @@ function Catflap() {
 }
 
 // ---------- 2. MEOW MAP ----------
+// Pins (Beth 2026-10-04): a cat whose coat is set shows its PHOTO, ringed in its coat colour; a cat with no coat set
+// stays a plain coloured circle, which doubles as the nudge to categorise. Cats with a home sit at that home with a
+// 🏠 badge; cats whose homes are within 25 m share ONE household marker with a count. Pins never sit on top of each
+// other: crowded ones are spread on a small ring around the true spot, re-laid at every zoom.
+function catPinHtml(cat, label, home) {
+  const set = L.coatsOf(cat).length > 0 || L.isLongHaired(cat);
+  const pid = set ? catPhotoId(cat) : null;
+  const fill = !set && L.isUnnamed(cat) ? 'var(--moss)' : swatch(cat);
+  return `<div class="pin ${pid ? 'photo' : ''} ${L.whiteRing(cat) ? 'ring' : ''}"><i style="background-color:${fill};${pid ? `border-color:${swatch(cat)}` : ''}"${pid ? ` data-photo="${esc(pid)}"` : ''}><em class="ini">${esc(L.initial(cat))}</em></i>${home ? '<b class="hb">🏠</b>' : ''}<span>${esc(label)}</span></div>`;
+}
+function householdHtml(cats) {
+  const faces = cats.slice(0, 3).map(e => { const pid = catPhotoId(e.cat); return `<i style="background-color:${swatch(e.cat)};border-color:${swatch(e.cat)}"${pid ? ` data-photo="${esc(pid)}"` : ''}><em class="ini">${esc(L.initial(e.cat))}</em></i>`; }).join('');
+  return `<div class="pin house"><div class="stackfaces">${faces}</div><b class="hb">🏠</b><span>Household (${cats.length})</span></div>`;
+}
 function MeowMap() {
   const n = S.sums.filter(e => e.count).length;
   $app.innerHTML = `${banner()}<div class="screen" style="overflow:hidden">
@@ -229,18 +250,48 @@ function MeowMap() {
   ${nav('map')}`;
   const mapEl = document.getElementById('map');
   const m = guardMap(mapEl, 'meow map', () => makeMap(mapEl));
-  const pins = [];
-  for (const e of S.sums) {
-    const p = L.lastPosition(e); if (!p) continue;
-    const unnamed = L.isUnnamed(e.cat);
-    const label = `${L.displayName(e.cat)} · ${e.count}`;
-    const hm = L.homeOf(e);
-    if (m && hm) guardMap(null, 'home ' + e.cat.id, () => window.L.marker([hm.lat, hm.lng], { icon: divIcon(`<div class="homepin" style="background:${swatch(e.cat)}" title="${esc(L.displayName(e.cat))}'s home">🏠</div>`) }).addTo(m).on('click', () => go('cat/' + e.cat.id)));
-    const html = `<div class="pin ${unnamed ? 'unnamed' : ''} ${L.whiteRing(e.cat) ? 'ring' : ''}"><i style="background:${unnamed ? 'var(--moss)' : swatch(e.cat)}">${esc(L.initial(e.cat))}</i><span>${esc(label)}</span></div>`;
-    if (m) guardMap(null, 'pin ' + e.cat.id, () => { const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(html) }).addTo(m); mk.on('click', () => go('cat/' + e.cat.id)); pins.push([p.lat, p.lng]); });
-  }
   const fallback = lastKnownPlace();
   if (m) guardMap(mapEl, 'meow map view', () => { if (fallback) m.setView([fallback.lat, fallback.lng], 16); else m.setView([54.5, -3], 5); });
+  const placed = [];   // { marker, at: [lat, lng], r: half-width in px }
+  if (m) {
+    const homed = new Set();
+    for (const h of L.households(S.sums)) {
+      for (const e of h.cats) homed.add(e.cat.id);
+      guardMap(null, 'household', () => {
+        if (h.cats.length === 1) {
+          const e = h.cats[0];
+          const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(catPinHtml(e.cat, `${L.displayName(e.cat)} · ${e.count}`, true)) }).addTo(m);
+          mk.on('click', () => go('cat/' + e.cat.id));
+          placed.push({ marker: mk, at: [h.lat, h.lng], r: 24 });
+        } else {
+          const list = `<div class="hhlist"><b>🏠 Household (${h.cats.length})</b>${h.cats.map(e => `<a href="#/cat/${esc(e.cat.id)}"><i style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}></i>${esc(L.displayName(e.cat))}<small>${e.count}</small></a>`).join('')}</div>`;
+          const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(householdHtml(h.cats)) }).addTo(m).bindPopup(list, { closeButton: false, offset: [0, -26] });
+          mk.on('popupopen', ev => hydratePhotos(ev.popup.getElement()));
+          placed.push({ marker: mk, at: [h.lat, h.lng], r: 12 + 12 * Math.min(3, h.cats.length) });
+        }
+      });
+    }
+    for (const e of S.sums) {
+      if (homed.has(e.cat.id)) continue;
+      const p = L.lastPosition(e); if (!p) continue;
+      guardMap(null, 'pin ' + e.cat.id, () => {
+        const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(catPinHtml(e.cat, `${L.displayName(e.cat)} · ${e.count}`, false)) }).addTo(m);
+        mk.on('click', () => go('cat/' + e.cat.id));
+        placed.push({ marker: mk, at: [p.lat, p.lng], r: 24 });
+      });
+    }
+    // Lay crowded pins out side by side, now and at every zoom, so a tap always lands on one cat.
+    const layout = () => guardMap(null, 'pin layout', () => {
+      const pts = placed.map(x => m.latLngToLayerPoint(x.at));
+      const out = L.spread(pts.map((p, i) => ({ x: p.x, y: p.y, r: placed[i].r })));
+      placed.forEach((x, i) => {
+        x.marker.setLatLng(out[i].crowded ? m.layerPointToLatLng(window.L.point(out[i].x, out[i].y)) : x.at);
+        const el = x.marker.getElement(); if (el) el.classList.toggle('crowded', out[i].crowded);
+      });
+    });
+    layout();
+    m.on('zoomend', layout);
+  }
   getPos().then(pos => {
     if (!document.getElementById('map')) return;
     const sub = document.getElementById('mapsub');
@@ -356,7 +407,7 @@ function Repurrt() {
           <button class="chip new ${d.catId === 'new' ? 'on' : ''}" data-cat="new"><div class="face">+</div><b>New cat</b></button></div></div>
       <div class="stack8"><div class="label">Who saw it</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-who="${p}" class="${d.seenBy === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>
       ${d.catId ? `<div class="stack8"><label class="label" for="catname">${d.catId === 'new' ? 'Name (leave blank if you don\'t know yet)' : 'Name (change it to rename)'}</label>
-        <input id="catname" class="field" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="${d.catId === 'new' ? 'e.g. Mittens' : ''}"></div>` : ''}
+        <div class="namerow"><input id="catname" class="field" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="${d.catId === 'new' ? 'e.g. Mittens' : ''}">${diceBtn('#catname', d.catId === 'new' ? d.coats : L.coatsOf(S.byId.get(d.catId)?.cat))}</div></div>` : ''}
       ${d.catId === 'new' ? `<div class="stack8"><div class="label">Looks like (tick all that fit)</div><div class="coats">${COATS.map(c => `<button data-coat="${c}" class="${d.coats.includes(c) ? 'on' : ''}">${c}</button>`).join('')}<button data-long class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div>${d.coats.length || d.longHaired ? `<div class="sub">Saves as: ${esc(L.coatText(d.coats, d.longHaired))}</div>` : ''}</div>` : ''}
       <div class="stack8"><div class="label">This place is</div><div class="seg small"><button data-lives="0" class="${!d.livesHere ? 'on' : ''}">Seen here</button><button data-lives="1" class="${d.livesHere ? 'on' : ''}">🏠 Lives here</button></div></div>
       <div class="pair"><div class="stack8"><div class="label">Where was it</div><div class="seg small"><button data-in="1" class="${d.inside ? 'on' : ''}">Inside</button><button data-in="0" class="${!d.inside ? 'on' : ''}">Outside</button></div></div>
@@ -499,7 +550,7 @@ function Meowmeries() {
       ${it.dup ? '' : it.include ? `
         ${it.cats.map((v, k) => `<div class="memrow"><select class="field memsel" data-i="${i}" data-k="${k}" aria-label="Cat ${k + 1} in photo ${i + 1}">${options(it, v)}</select>
           ${k === 0 ? `<button class="ghost" data-place="${i}">${placed ? 'Move pin' : 'Place it'}</button>` : `<button class="ghost" data-dropcat="${i}:${k}" aria-label="Remove this cat">✕</button>`}</div>`).join('')}
-        ${newInputs.map(id => `<input class="field" data-newname="${esc(id)}" value="${esc(M.newCats[id].name)}" placeholder="Name ${esc('Cat ' + numFor(id))} (optional)" aria-label="Name for ${esc('Cat ' + numFor(id))}">`).join('')}
+        ${newInputs.map(id => `<div class="namerow"><input class="field" data-newname="${esc(id)}" value="${esc(M.newCats[id].name)}" placeholder="Name ${esc('Cat ' + numFor(id))} (optional)" aria-label="Name for ${esc('Cat ' + numFor(id))}">${diceBtn(`[data-newname="${id}"]`, [])}</div>`).join('')}
         ${M.placing === i ? `<div class="wheremap"><div id="pmap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="ghost" data-placedone="${i}">Done</button>` : ''}
         <button class="second" data-addcat="${i}">📸 + Another cat in this photo</button>
         <div class="memfoot"><button class="linkbtn" data-skip="${i}">Skip this photo</button></div>` : `<button class="linkbtn" data-skip="${i}">Include it again</button>`}
@@ -651,7 +702,7 @@ function CatEntry(id) {
   const home = L.homeOf(e);
   const desc = [L.coatText(L.coatsOf(c), L.isLongHaired(c)) || c.coat, c.markings, c.collar ? (c.collarColour ? c.collarColour + ' collar' : 'collar') : '', c.friendliness, home ? '' : c.homeNote].filter(Boolean).join(' · ');
   const nameBlock = S.renaming === id
-    ? `<form class="rename" id="rn"><input id="rnin" class="field" value="${esc(c.name || '')}" placeholder="Name this cat" aria-label="New name"><button type="submit">Save</button></form>`
+    ? `<form class="rename" id="rn"><input id="rnin" class="field" value="${esc(c.name || '')}" placeholder="Name this cat" aria-label="New name">${diceBtn('#rnin', L.coatsOf(c))}<button type="submit">Save</button></form>`
     : `<div class="nameline"><div class="nm">${esc(L.displayName(c))}</div><button class="pencil" id="pencil" aria-label="Rename this cat">${I.pencil}</button></div>
        <div class="desc">${esc(desc || (c.name ? 'tap the pencil to rename' : 'tap the pencil to name'))}</div>
        <button class="editbtn" id="editdetails">Edit details</button>`;
@@ -682,7 +733,7 @@ function CatEntry(id) {
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
         : `<div class="acts">
           ${!L.hasPin(s) ? `<button class="ghost" data-placesight="${esc(s.id)}">📍 Place it on the map</button>` : ''}
-          ${hasPhoto ? `<button class="ghost" data-focus="${esc(s.id)}">🎯 Tap the cat (set the crop)</button>` : ''}
+          ${hasPhoto ? `<button class="ghost" data-crop="${esc(s.photoId)}">✂️ Adjust crop</button>` : ''}
           ${hasPhoto ? `<button class="ghost" data-another="${esc(s.id)}">+ Another cat in this photo</button>` : ''}
           <button class="ghost" data-lives="${esc(s.id)}">${s.livesHere ? '🏠 Not its home: mark as Seen here' : '🏠 Lives here: set as its home'}</button>
           <button class="ghost" data-wrong="${esc(s.id)}">Wrong cat: move it</button>
@@ -703,6 +754,7 @@ function CatEntry(id) {
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
+    ${photosStrip(e)}${friendsRow(e)}${lookalikeRow(e)}
     <div class="pad stack8" style="padding-top:16px"><div class="label">Sightings · tap ⋯ for options</div><div>
       ${e.sightings.map(row).join('') || '<div class="empty">No sightings yet.</div>'}</div></div>
     <div class="pad" style="padding-top:12px;padding-bottom:20px">${foot}</div></div>${nav('catalogue')}`;
@@ -727,6 +779,18 @@ function CatEntry(id) {
   for (const b of $app.querySelectorAll('[data-row]')) b.onclick = () => { S.rowOpen = S.rowOpen === b.dataset.row ? null : b.dataset.row; S.moving = null; S.placingSight = null; render(); };
   for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; S.focusing = null; render(); };
   for (const b of $app.querySelectorAll('[data-focus]')) b.onclick = () => { S.focusing = b.dataset.focus; render(); };
+  for (const b of $app.querySelectorAll('[data-crop]')) b.onclick = () => { S.cropReturn = 'cat/' + id; go('crop/' + b.dataset.crop); };
+  for (const b of $app.querySelectorAll('[data-galto]')) b.onclick = () => { S.galIdx = +b.dataset.galto; go('photos/' + id); };
+  for (const b of $app.querySelectorAll('[data-unfriend]')) b.onclick = () => act(async () => {
+    const o = b.dataset.unfriend, oc = S.byId.get(o)?.cat;
+    await S.store.patch('cats', id, { notFriends: [...new Set([...(c.notFriends || []), o])] });
+    if (oc) await S.store.patch('cats', o, { notFriends: [...new Set([...(oc.notFriends || []), id])] });
+    return `Unlinked: ${L.displayName(oc || {})} is no longer listed as a friend`;
+  });
+  for (const b of $app.querySelectorAll('[data-lookmerge]')) b.onclick = () => { S.lookMerge = b.dataset.lookmerge; render(); };
+  const lmy = document.getElementById('lookmergeyes'); if (lmy) lmy.onclick = () => act(async () => { const o = S.lookMerge; S.lookMerge = null; return mergeCats(id, o); });
+  const lmn = document.getElementById('lookmergeno'); if (lmn) lmn.onclick = () => { S.lookMerge = null; render(); };
+  wireDice();
   const fimg = document.getElementById('focusimg');
   if (fimg) {
     const s = sOf(S.focusing), dot = document.getElementById('focusdot');
@@ -820,6 +884,27 @@ async function fillHome(catId, place) {
   } catch (x) { console.warn('fillHome', x); }
 }
 
+function photosStrip(e) {
+  const list = catPhotos(e); if (!list.length) return '';
+  return `<div class="pad stack8" style="padding-top:16px"><div class="label">All photos (${list.length}) · tap to open</div><div class="latest">${list.map((s, i) => `<button class="lcard plain" data-galto="${i}"><span class="lface" style="background-color:${swatch(e.cat)}" data-photo="${esc(s.photoId)}"></span><small>${esc(L.dayWord(s.at, Date.now()))}</small></button>`).join('')}</div></div>`;
+}
+function friendsRow(e) {
+  const fr = S.friends && S.friends.get(e.cat.id); if (!fr || !fr.size) return '';
+  const items = [...fr.entries()].map(([oid, f]) => ({ o: S.byId.get(oid), f })).filter(x => x.o).sort((a, b) => b.f.n - a.f.n);
+  if (!items.length) return '';
+  return `<div class="pad stack8" style="padding-top:16px"><div class="label">Friends · photographed together</div><div class="latest">${items.map(({ o, f }) => `<div class="lcard"><a href="#/cat/${esc(o.cat.id)}" class="lface" style="background-color:${swatch(o.cat)}"${photoAttr(o.cat)}><em class="ini">${esc(L.initial(o.cat))}</em></a><b>${esc(L.displayName(o.cat))}</b><small>${f.why === 'same photo' ? 'same photo' : 'seen together'}${f.n > 1 ? ' ×' + f.n : ''}</small><button class="unfriend" data-unfriend="${esc(o.cat.id)}" aria-label="Not friends with ${esc(L.displayName(o.cat))}">not friends</button></div>`).join('')}</div></div>`;
+}
+function lookalikeRow(e) {
+  const list = L.lookalikes(S.sums, e.cat.id); if (!list.length) return '';
+  const me = e.cat;
+  if (S.lookMerge && list.some(o => o.cat.id === S.lookMerge)) {
+    const o = S.byId.get(S.lookMerge).cat;
+    return `<div class="pad stack8" style="padding-top:16px"><div class="acts"><div class="label">Merge ${esc(L.displayName(o))} into ${esc(L.displayName(me))}?</div><div class="sub">Its sightings move here. Undo is in Recently deleted.</div><button class="primary" id="lookmergeyes">Yes, they are the same cat</button><button class="ghost" id="lookmergeno">Cancel</button></div></div>`;
+  }
+  return `<div class="pad stack8" style="padding-top:16px"><div class="label">Lookalikes nearby · same coat within 300 m</div>${list.slice(0, 6).map(o => `<div class="lookrow"><span class="lface sm" style="background-color:${swatch(me)}"${photoAttr(me)}></span><span class="lface sm" style="background-color:${swatch(o.cat)}"${photoAttr(o.cat)}></span>
+    <a href="#/cat/${esc(o.cat.id)}" class="lookname"><b>${esc(L.displayName(o.cat))}</b><small>${L.distWord(o.distance)} away · ${o.count} sighting${o.count === 1 ? '' : 's'}</small></a><button class="ghost" data-lookmerge="${esc(o.cat.id)}">Merge</button></div>`).join('')}</div>`;
+}
+
 function newCatDoc(id, name, coats, longHaired) {
   const n = name.trim();
   coats = coats || [];
@@ -855,6 +940,127 @@ async function unmerge(loserId) {
   for (const s of S.raw.sightings.filter(s => s.mergedFrom === loserId && s.catId === lose.mergedInto)) await S.store.patch('sightings', s.id, { catId: loserId, mergedFrom: null });
   await S.store.patch('cats', loserId, { mergedInto: null, unmergedAt: Date.now() });
   return `${L.displayName(lose)} is its own cat again`;
+}
+
+// ---------- ALL PHOTOS: a full-screen swipe gallery of every photo of one cat, newest first ----------
+// Each photo: Use as profile photo, Adjust crop, Lives here, Another cat in this photo, Wrong cat (Beth 2026-10-04).
+function catPhotos(e) {
+  const seen = new Set(), out = [];
+  for (const s of e.sightings) if (photoOk(s.photoId) && !seen.has(s.photoId)) { seen.add(s.photoId); out.push(s); }
+  return out;
+}
+function Gallery(catId) {
+  const e = S.byId.get(catId);
+  if (!e) { go('catalogue'); return; }
+  const list = catPhotos(e);
+  if (!list.length) { go('cat/' + catId); return; }
+  const i = Math.min(Math.max(0, S.galIdx || 0), list.length - 1); S.galIdx = i;
+  const s = list[i], c = e.cat, now = Date.now();
+  const isProfile = catPhotoId(c) === s.photoId;
+  $app.innerHTML = `<div class="screen dark">
+    <div class="cam-head"><a class="round" href="#/cat/${esc(catId)}" aria-label="Back to ${esc(L.displayName(c))}">${I.back}</a><div style="font-size:16px;font-weight:700">${esc(L.displayName(c))} · ${i + 1} of ${list.length}</div><div style="width:44px"></div></div>
+    <div class="galbox" id="galbox"><img id="galimg" alt="Photo ${i + 1} of ${list.length}">
+      ${i > 0 ? `<button class="galnav l" id="galprev" aria-label="Newer photo">${I.back}</button>` : ''}
+      ${i < list.length - 1 ? `<button class="galnav r" id="galnext" aria-label="Older photo">${I.next}</button>` : ''}</div>
+    <div class="galinfo"><b>${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</b>
+      <small>${L.hasPin(s) ? '📍 placed on the map' : '📍 no place yet'}${s.livesHere ? ' · 🏠 lives here' : ''} · seen by ${esc(PERSON[s.seenBy] || s.seenBy)}${isProfile ? ' · ⭐ profile photo' : ''}</small></div>
+    <div class="galacts">
+      ${isProfile ? '' : '<button class="gbtn" id="gprofile">⭐ Use as profile photo</button>'}
+      <button class="gbtn" id="gcrop">✂️ Adjust crop</button>
+      <button class="gbtn" id="glives">${s.livesHere ? '🏠 Not its home' : '🏠 Lives here'}</button>
+      <button class="gbtn" id="ganother">📸 + Another cat in this photo</button>
+      <button class="gbtn" id="gwrong">Wrong cat: move it</button>
+    </div></div>`;
+  const img = document.getElementById('galimg');
+  S.store.photo(s.photoId).then(p => { if (p && p.data) img.src = p.data; });
+  const step = d => { S.galIdx = i + d; render(); };
+  const pv = document.getElementById('galprev'); if (pv) pv.onclick = () => step(-1);
+  const nx = document.getElementById('galnext'); if (nx) nx.onclick = () => step(1);
+  // Swipe: left for older, right for newer.
+  let x0 = null; const box = document.getElementById('galbox');
+  box.onpointerdown = ev => { x0 = ev.clientX; };
+  box.onpointerup = ev => { if (x0 === null) return; const dx = ev.clientX - x0; x0 = null; if (dx < -50 && i < list.length - 1) step(1); else if (dx > 50 && i > 0) step(-1); };
+  const gp = document.getElementById('gprofile'); if (gp) gp.onclick = () => act(async () => { await S.store.patch('cats', catId, { thumbPhotoId: s.photoId }); return '⭐ Profile photo set'; });
+  document.getElementById('gcrop').onclick = () => { S.cropReturn = 'photos/' + catId; go('crop/' + s.photoId); };
+  document.getElementById('glives').onclick = () => act(async () => {
+    const on = !s.livesHere;
+    if (on && !L.hasPin(s)) return 'Place this sighting on the map first (from the cat page), then mark it as home';
+    await S.store.patch('sightings', s.id, { livesHere: on }); if (on) fillHome(catId, s);
+    return on ? 'Set as home 🏠' : 'Marked as Seen here';
+  });
+  document.getElementById('ganother').onclick = () => { S.draft = newDraft({ photoId: s.photoId, lat: s.lat, lng: s.lng, source: s.locationSource || 'manual', at: s.at, seenBy: s.seenBy, inside: s.insideOutside === 'inside', excludeCat: catId }); go('repurrt'); };
+  document.getElementById('gwrong').onclick = () => { S.rowOpen = s.id; S.moving = s.id; go('cat/' + catId); };
+}
+
+// ---------- ADJUST CROP: drag the photo under a square frame, pinch or slide to zoom, Save ----------
+// Stores fx, fy (background-position %) and zoom on the photo doc; every crop of that photo then uses them.
+// Supersedes "Tap the cat" (Beth 2026-10-04: "pick a thumbnail placing for the image with a drag and drop").
+function CropEditor(photoId) {
+  const back = S.cropReturn || 'catalogue';
+  $app.innerHTML = `<div class="screen dark">
+    <div class="cam-head"><button class="round" id="cback" aria-label="Back">${I.back}</button><div style="font-size:16px;font-weight:700">ADJUST CROP</div><div style="width:44px"></div></div>
+    <div class="pad stack" style="align-items:center;gap:14px;padding-top:8px">
+      <div class="cropframe" id="cframe"></div>
+      <div class="sub" style="color:rgba(255,255,255,0.75);text-align:center">Drag the photo so the cat sits in the square. Pinch, or use the slider, to zoom.</div>
+      <input type="range" id="czoom" min="1" max="4" step="0.05" value="1" aria-label="Zoom" style="width:100%">
+      <button class="primary" id="csave" disabled>Save crop</button>
+      <button class="ghost" id="creset">Show the whole photo again</button>
+    </div></div>`;
+  const frame = document.getElementById('cframe'), zoomEl = document.getElementById('czoom'), save = document.getElementById('csave');
+  document.getElementById('cback').onclick = () => go(back);
+  let p = null, fx = 50, fy = 50, z = 1;
+  const draw = () => {
+    if (!p) return;
+    const F = frame.clientWidth, ar = (p.w || 1) / (p.h || 1);
+    const bw = Math.max(F, F * ar) * z;
+    frame.style.backgroundImage = `url("${p.data}")`;
+    frame.style.backgroundSize = `${bw}px auto`;
+    frame.style.backgroundPosition = `${fx}% ${fy}%`;
+    zoomEl.value = z;
+  };
+  S.store.photo(photoId).then(doc => {
+    if (!doc) return; p = doc;
+    if (Number.isFinite(doc.fx)) { fx = doc.fx; fy = doc.fy; z = Number.isFinite(doc.zoom) ? doc.zoom : 1; }
+    save.disabled = false; draw();
+  });
+  // One finger drags; two fingers pinch.
+  const ptrs = new Map(); let last = null, pinch0 = null;
+  frame.onpointerdown = ev => { frame.setPointerCapture(ev.pointerId); ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY }); last = { x: ev.clientX, y: ev.clientY }; pinch0 = null; };
+  frame.onpointermove = ev => {
+    if (!p || !ptrs.has(ev.pointerId)) return;
+    ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (ptrs.size >= 2) {
+      const [a, b] = [...ptrs.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (!pinch0) pinch0 = { d, z }; else z = Math.min(4, Math.max(1, pinch0.z * d / pinch0.d));
+      draw(); return;
+    }
+    const F = frame.clientWidth, ar = (p.w || 1) / (p.h || 1);
+    const bw = Math.max(F, F * ar) * z, bh = bw / ar;
+    const dx = ev.clientX - last.x, dy = ev.clientY - last.y; last = { x: ev.clientX, y: ev.clientY };
+    if (bw > F) fx = Math.min(100, Math.max(0, fx - dx / (bw - F) * 100));
+    if (bh > F) fy = Math.min(100, Math.max(0, fy - dy / (bh - F) * 100));
+    draw();
+  };
+  frame.onpointerup = frame.onpointercancel = ev => { ptrs.delete(ev.pointerId); pinch0 = null; const r = [...ptrs.values()][0]; last = r ? { ...r } : null; };
+  zoomEl.oninput = () => { z = Number(zoomEl.value); draw(); };
+  save.onclick = () => act(async () => {
+    await S.store.patch('photos', photoId, { fx: Math.round(fx * 10) / 10, fy: Math.round(fy * 10) / 10, zoom: Math.round(z * 100) / 100, focusAt: Date.now(), focusBy: S.me || 'unknown' });
+    go(back); return 'Crop saved: every crop of this photo now uses it';
+  });
+  document.getElementById('creset').onclick = () => act(async () => {
+    await S.store.patch('photos', photoId, { fx: null, fy: null, zoom: null, focusAt: Date.now(), focusBy: S.me || 'unknown' });
+    go(back); return 'Back to the whole photo';
+  });
+}
+
+// 🎲 beside a name field: a random name, leaning on the cat's coat; tap again for another.
+function diceBtn(target, coats) { return `<button type="button" class="dice" data-dice="${esc(target)}" data-coats="${esc((coats || []).join('|'))}" aria-label="Suggest a random name">🎲</button>`; }
+function wireDice(root = $app) {
+  for (const b of root.querySelectorAll('[data-dice]')) b.onclick = () => {
+    const input = root.querySelector(b.dataset.dice); if (!input) return;
+    input.value = randomName(b.dataset.coats ? b.dataset.coats.split('|') : [], input.value);
+    input.dispatchEvent(new Event('input')); input.dispatchEvent(new Event('change'));
+  };
 }
 
 // ---------- RECENTLY DELETED: everything soft-deleted or merged, newest first, each with Restore ----------

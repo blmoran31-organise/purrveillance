@@ -315,8 +315,9 @@ export function lookalikes(summaries, id) {
   return out.sort((a, b) => a.distance - b.distance);
 }
 
-// HOUSEHOLDS: cats whose homes are within 25 m of each other share one map marker.
-export function households(summaries, within = 25) {
+// HOUSEHOLDS: cats whose homes are within 5 m of each other share one map marker (the same building). Beth ruled
+// 2026-10-05 REPLACE of the 2026-10-04 25 m: terraced houses are about 5 m apart, so next-door homes merged.
+export function households(summaries, within = 5) {
   const homes = summaries.map(e => ({ e, h: homeOf(e) })).filter(x => x.h);
   const groups = [];
   for (const x of homes) {

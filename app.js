@@ -252,7 +252,7 @@ function Catflap() {
 // ---------- 2. MEOW MAP ----------
 // Pins (Beth 2026-10-04): a cat whose coat is set shows its PHOTO, ringed in its coat colour; a cat with no coat set
 // stays a plain coloured circle, which doubles as the nudge to categorise. Cats with a home sit at that home with a
-// 🏠 badge; cats whose homes are within 25 m share ONE household marker with a count. Pins sit on their true spots
+// 🏠 badge; cats whose homes are within 5 m share ONE household marker with a count. Pins sit on their true spots
 // at every zoom; only at full zoom are overlapping pins laid side by side (logic.layoutPins).
 function catPinHtml(cat, label, home) {
   const set = L.coatsOf(cat).length > 0 || L.isLongHaired(cat);

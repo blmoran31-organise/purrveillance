@@ -1564,8 +1564,8 @@ async function boot() {
   S.house = house; S.view = view; S.guest = guestPair ? guestPair[1] : null;
   const status = t => { if (t) $app.innerHTML = `<div class="setup"><div class="eyebrow">PURRVEILLANCE</div><div class="title">One moment</div><p>${esc(t)}</p><p class="sub">This happens once. Keep the app open.</p></div>`; };
   try { S.store = await openStore(house, { demo: DEMO, view, guest: S.guest, onStatus: status }); }
-  if (S.store && S.store.watchDrops && !S.view) S.store.watchDrops(list => { S.drops = list; if (route().name === 'catflap') render(); });
   catch (e) { console.error(e); $app.innerHTML = `<div class="setup"><div class="title">Couldn't open the log</div><p>${esc(e.code || e.message || e)}</p><p class="sub">Check signal and reload.</p></div>`; return; }
+  if (S.store.watchDrops && !S.view) S.store.watchDrops(list => { S.drops = list; if (route().name === 'catflap') render(); });
   if (DEMO && params.has('seed')) seedDemo(S.store);
   let first = true;
   S.store.subscribe((d, err) => {

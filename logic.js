@@ -318,6 +318,17 @@ export function households(summaries, within = 25) {
   return groups.map(gr => ({ cats: gr.map(x => x.e), lat: gr.reduce((s, x) => s + x.h.lat, 0) / gr.length, lng: gr.reduce((s, x) => s + x.h.lng, 0) / gr.length }));
 }
 
+// Pin layout per zoom (Beth's ruling 2026-10-05, REPLACES the every-zoom nudging of 2026-10-04): below the map's
+// deepest zoom every pin sits EXACTLY on its true point and overlaps are allowed; only at full zoom are overlapping
+// pins placed side by side (spread below), so each cat can be tapped even at one venue. `crowded` marks a pin that
+// overlaps another at this zoom, so its label can be hidden. Returns {x, y, moved, crowded} per point.
+export function layoutPins(points, atFullZoom, pad = 4) {
+  const r = p => p.r || 23;
+  const crowded = points.map((p, i) => points.some((q, j) => j !== i && Math.hypot(p.x - q.x, p.y - q.y) < r(p) + r(q) + pad));
+  if (!atFullZoom) return points.map((p, i) => ({ x: p.x, y: p.y, moved: false, crowded: crowded[i] }));
+  return spread(points, pad).map((o, i) => ({ ...o, crowded: crowded[i] }));
+}
+
 // Marker layout (Beth 2026-10-04 01:33): a marker sits EXACTLY on its true point unless its circle overlaps another.
 // Only overlapping markers move, by the smallest nudge that clears the overlap, clustered round their shared spot;
 // every other marker is a fixed obstacle and never moves. Run per zoom, so once markers stop overlapping they are

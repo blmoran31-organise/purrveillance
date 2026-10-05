@@ -149,7 +149,7 @@ function render() {
   const r = route();
   killMaps();
   if (r.name !== 'camera' && r.name !== 'guest') stopCamera();
-  if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
+  if (r.name !== 'cat') { S.timing = null; S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
   // View-only link: the screens that only add or change things are not reachable. The rules refuse the writes anyway.
   if (S.view && VIEW_BLOCKED.includes(r.name)) { location.replace('#/catflap'); return; }
   if (r.name === 'guest' && !(S.guest && S.store && S.store.guestOk)) { location.replace('#/catflap'); return; }
@@ -169,7 +169,7 @@ function render() {
 const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted', 'catwalk'];
 const VIEW_HIDE = ['.logs', '.who', '.hint', '#nudge', '.camfab', '#nophoto', '.binlink', '#pencil', '#fav', '#editdetails', '#delcat', '#delcatyes', '#merge', '#addphoto',
   '#gprofile', '#glives', '#gcrop', '#ganother', '#gwrong', '.srow2 .acts', '[data-delsight]', '[data-delphoto]', '[data-crop]', '[data-lives]', '[data-wrong]', '[data-another]', '[data-moveto]',
-  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet', '#catwalkcard'].join(',');
+  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet', '#catwalkcard', '#movehome', '#hsmove', '[data-stime]'].join(',');
 
 // ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
 // Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
@@ -293,6 +293,7 @@ function MeowMap() {
     const fan = window.L.layerGroup().addTo(m);
     let open = null;   // the household whose cats are fanned out
     const strip = document.getElementById('hstrip');
+    const houses = [];   // { h, mk } so a cat page's "Move home" can find its house
     const closeFan = () => { open = null; fan.clearLayers(); if (strip) strip.hidden = true; };
     // Tap a house: its cats' circles fan out round it, each one tappable to the cat's page (replaces the mini list).
     const drawFan = () => {
@@ -311,14 +312,31 @@ function MeowMap() {
       });
       hydratePhotos(m.getContainer());
     };
+    // MOVE A HOUSE (Beth 2026-10-05): the house goes draggable; Save moves every home in it by the same amount, so
+    // next-door homes keep their spacing. Never on a view or guest link.
+    let moving = null;
+    const startMove = (cats, at, hideMk) => {
+      if (S.view || !strip) return;
+      closeFan(); if (hideMk) hideMk.setOpacity(0.25);
+      const mv = window.L.marker([at.lat, at.lng], { draggable: true, zIndexOffset: 3000, icon: divIcon(houseHtml(cats.length, false).replace('pin house2', 'pin house2 movinghouse')) }).addTo(m);
+      moving = mv;
+      const label = cats.length === 1 ? L.displayName(cats[0].cat) + "'s home" : `this house (${cats.length} cats)`;
+      strip.innerHTML = `<b>🏠 Moving ${esc(label)}</b><span>drag it to the right spot</span><button class="primary hsbtn" id="mvsave">Save new spot</button><button class="ghost hsbtn" id="mvcancel">Cancel</button>`;
+      strip.hidden = false;
+      const end = () => { mv.remove(); moving = null; if (hideMk) hideMk.setOpacity(1); strip.hidden = true; S.moveHomeOf = null; };
+      document.getElementById('mvcancel').onclick = end;
+      document.getElementById('mvsave').onclick = () => { const p = mv.getLatLng(); end(); act(() => moveHomes(cats, p.lat - at.lat, p.lng - at.lng)); };
+    };
     for (const h of hh) {
       for (const e of h.cats) homed.add(e.cat.id);
       guardMap(null, 'home', () => {
         const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(houseHtml(h.cats.length, h.cats.every(L.homeUnmatched))), zIndexOffset: 500 }).addTo(m);
+        houses.push({ h, mk });
         mk.on('click', () => {
+          if (moving) return;
           if (open === h) return closeFan();
           open = h; drawFan();
-          if (strip) { const street = h.cats.map(e => e.cat.homeNote).find(Boolean); strip.innerHTML = `<b>🏠 Household (${h.cats.length})</b>${street ? `<span>${esc(street)}</span>` : ''}<button aria-label="Close" id="hsclose">✕</button>`; strip.hidden = false; document.getElementById('hsclose').onclick = closeFan; }
+          if (strip) { const street = h.cats.map(e => e.cat.homeNote).find(Boolean); strip.innerHTML = `<b>🏠 Household (${h.cats.length})</b>${street ? `<span>${esc(street)}</span>` : ''}${S.view ? '' : '<button class="hsmove" id="hsmove">Move house</button>'}<button aria-label="Close" id="hsclose">✕</button>`; strip.hidden = false; document.getElementById('hsclose').onclick = closeFan; const hm = document.getElementById('hsmove'); if (hm) hm.onclick = () => startMove(h.cats, { lat: h.lat, lng: h.lng }, mk); }
         });
         placed.push({ marker: mk, at: [h.lat, h.lng], r: 22 });
       });
@@ -355,7 +373,16 @@ function MeowMap() {
     m.on('click', closeFan);
     // Long-press (or right-click) anywhere: "A cat lives here", for a cat in a window, a cat tree, or one you were
     // told about. No photo, no sighting. Not on a view-only link.
-    if (!S.view) m.on('contextmenu', ev => { closeFan(); livesHereSheet(m, ev.latlng); });
+    if (!S.view) m.on('contextmenu', ev => { if (moving) return; closeFan(); livesHereSheet(m, ev.latlng); });
+    // Arrived from a cat page's "Move home": centre on that home and start moving it (that cat's home only).
+    if (S.moveHomeOf && !S.view) {
+      const e = S.byId.get(S.moveHomeOf), h = e && L.homeOf(e);
+      if (h) {
+        const hit = houses.find(x => x.h.cats.some(c => c.cat.id === e.cat.id));
+        m.setView([h.lat, h.lng], 18, { animate: false });
+        startMove([e], { lat: h.lat, lng: h.lng }, hit && hit.h.cats.length === 1 ? hit.mk : null);
+      } else S.moveHomeOf = null;
+    }
   }
   getPos().then(pos => {
     if (!document.getElementById('map')) return;
@@ -390,9 +417,9 @@ async function draftFromFile(file) {
   const photo = await makeThumb(img, img.naturalWidth, img.naturalHeight);
   // NaN is typeof 'number': Android's picker blanks GPS to 0/0, which reads as NaN (18 live sightings, 2026-10-03).
   const exifPlace = gps ? L.cleanPlace(gps.latitude, gps.longitude) : null;
-  if (exifPlace) return newDraft({ photo, lat: exifPlace.lat, lng: exifPlace.lng, source: 'exif', at: at || Date.now() });
+  if (exifPlace) return newDraft({ photo, lat: exifPlace.lat, lng: exifPlace.lng, source: 'exif', at: at || Date.now(), atFromPhoto: !!at });
   const pos = await getPos();
-  return newDraft({ photo, lat: pos?.lat, lng: pos?.lng, source: pos ? 'phone' : 'none', at: at || Date.now(), noGpsInPhoto: true });
+  return newDraft({ photo, lat: pos?.lat, lng: pos?.lng, source: pos ? 'phone' : 'none', at: at || Date.now(), atFromPhoto: !!at, noGpsInPhoto: true });
 }
 function newDraft(o = {}) {
   return { photo: null, lat: undefined, lng: undefined, source: 'none', at: Date.now(), catId: null, seenBy: S.me || 'beth', inside: false, petted: false, livesHere: false, name: '', coats: [], longHaired: false, note: '', ...o };
@@ -451,9 +478,11 @@ function Repurrt() {
   const nearPinned = pinAt ? L.nearest(named, pinAt) : [];
   const near = [...nearPinned, ...byRecent(named.filter(e => !nearPinned.some(x => x.cat.id === e.cat.id)))];
   const close = near.filter(e => e.distance <= 250);
-  const shown = (S.showAllChips ? near : close).filter(e => e.cat.id !== d.excludeCat && !(d.doneCats || []).includes(e.cat.id));
+  // Search (Beth 2026-10-05): typing filters EVERY live cat by name, number, coat and markings, nearest first.
+  const q = (d.q || '').trim(), hits = q ? new Set(L.searchCats(named, q).map(e => e.cat.id)) : null;
+  const shown = (q ? near.filter(e => hits.has(e.cat.id)) : (S.showAllChips ? near : close)).filter(e => e.cat.id !== d.excludeCat && !(d.doneCats || []).includes(e.cat.id));
   if (d.catId && d.catId !== 'new' && !shown.some(e => e.cat.id === d.catId)) { const sel = near.find(e => e.cat.id === d.catId); if (sel) shown.unshift(sel); }
-  const more = near.length - shown.length;
+  const more = q ? 0 : near.length - shown.length;
   const chip = e => `<button class="chip ${d.catId === e.cat.id ? 'on' : ''}" data-cat="${esc(e.cat.id)}"><div class="face" style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}></div><b>${esc(L.displayName(e.cat))}</b><small>${isFinite(e.distance) ? L.distWord(e.distance) : (e.last ? L.dayWord(e.last, Date.now()) : 'no pins')}</small></button>`;
   const sel = d.catId && d.catId !== 'new' ? S.byId.get(d.catId) : null;
   const saveLabel = d.catId === 'new' ? (d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`) : sel ? `Save sighting of ${L.displayName(sel.cat)}` : 'Pick a cat first';
@@ -467,10 +496,13 @@ function Repurrt() {
         <input id="addphoto" type="file" accept="image/*" aria-label="Add a photo"></label>`}
       <div class="stack8"><div class="label">Where</div><div class="wheremap"><div id="wmap" style="position:absolute;inset:0"></div><div class="cap">${capText}</div></div></div>
       <div class="stack8"><div class="label">Which cat? (nearest first)</div>
-        <div class="chips">${shown.map(chip).join('')}
+        <input id="catsearch" class="field" type="search" autocomplete="off" placeholder="Search every cat: name, number or coat" value="${esc(d.q || '')}" aria-label="Search cats">
+        <div class="chips" id="catchips">${shown.map(chip).join('')}
           ${more > 0 ? `<button class="chip new" id="morechips"><div class="face">…</div><b>${more} more</b><small>further away</small></button>` : ''}
-          <button class="chip new ${d.catId === 'new' ? 'on' : ''}" data-cat="new"><div class="face">+</div><b>New cat</b></button></div></div>
+          ${q && !shown.length ? `<button class="chip new" data-qname="${esc(q)}"><div class="face">+</div><b>New cat called ${esc(q)}</b></button>` : `<button class="chip new ${d.catId === 'new' ? 'on' : ''}" data-cat="new"><div class="face">+</div><b>New cat</b></button>`}</div></div>
       <div class="stack8"><div class="label">Who saw it</div><div class="seg">${['beth', 'canada', 'both'].map(p => `<button data-who="${p}" class="${d.seenBy === p ? 'on' : ''}">${PERSON[p]}</button>`).join('')}</div></div>
+      <div class="stack8" id="whenrow"><div class="label">When</div><div class="seg small"><button data-when="now" class="${d.timeMode !== 'earlier' ? 'on' : ''}">Now</button><button data-when="earlier" class="${d.timeMode === 'earlier' ? 'on' : ''}">Earlier</button></div>
+        ${d.timeMode === 'earlier' ? `<input id="whenat" class="field" type="datetime-local" value="${L.toLocalInput(d.at)}" max="${L.toLocalInput(Date.now())}" aria-label="When you saw it">${d.whenNote ? `<div class="err">${esc(d.whenNote)}</div>` : d.atFromPhoto ? '<div class="sub">from the photo · tap to change</div>' : ''}` : ''}</div>
       ${d.catId ? `<div class="stack8"><label class="label" for="catname">${d.catId === 'new' ? 'Name (leave blank if you don\'t know yet)' : 'Name (change it to rename)'}</label>
         <div class="namerow"><input id="catname" class="field" type="text" autocomplete="off" value="${esc(d.name)}" placeholder="${d.catId === 'new' ? 'e.g. Mittens' : ''}">${diceBtn('#catname', d.catId === 'new' ? d.coats : L.coatsOf(S.byId.get(d.catId)?.cat))}</div></div>` : ''}
       ${d.catId === 'new' ? `<div class="stack8"><div class="label">Looks like (tick all that fit)</div><div class="coats">${COATS.map(c => `<button data-coat="${c}" class="${d.coats.includes(c) ? 'on' : ''}">${c}</button>`).join('')}<button data-long class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div>${d.coats.length || d.longHaired ? `<div class="sub">Saves as: ${esc(L.coatText(d.coats, d.longHaired))}</div>` : ''}</div>` : ''}
@@ -480,7 +512,7 @@ function Repurrt() {
       <div class="stack8"><label class="label" for="note">Note</label><textarea id="note" class="field" placeholder="optional, e.g. under the yellow van">${esc(d.note)}</textarea></div>
     </div></div>
     <div class="savebar"><button class="primary" id="save" ${d.catId ? '' : 'disabled'}>${esc(saveLabel)}</button>
-      ${d.photo || d.photoId ? `<button class="second" id="saveanother" ${d.catId ? '' : 'disabled'}>📸 Save, then + Another cat in this photo</button>` : ''}<div class="note" id="savenote">Saves to both phones · ${esc(summary)}</div><div class="err" id="saveerr" hidden></div></div>`;
+      ${d.photo || d.photoId ? `<button class="second" id="saveanother" ${d.catId ? '' : 'disabled'}>📸 Save, then + Another cat in this photo</button>` : ''}<button class="note notebtn" id="savenote">Saves to both phones · ${esc(summary)}</button><div class="err" id="saveerr" hidden></div></div>`;
 
   document.getElementById('back').onclick = () => { S.draft = null; S.showAllChips = false; history.length > 1 ? history.back() : go('catflap'); };
   const wEl = document.getElementById('wmap');
@@ -496,7 +528,22 @@ function Repurrt() {
   const keep = () => { const n = document.getElementById('catname'); if (n) d.name = n.value; const t = document.getElementById('note'); if (t) d.note = t.value; };
   for (const b of $app.querySelectorAll('[data-cat]')) b.onclick = () => { keep(); d.catId = b.dataset.cat; d.name = d.catId === 'new' ? '' : (S.byId.get(d.catId)?.cat.name || ''); render(); };
   const mc = document.getElementById('morechips'); if (mc) mc.onclick = () => { keep(); S.showAllChips = true; render(); };
+  for (const b of $app.querySelectorAll('[data-qname]')) b.onclick = () => { keep(); d.catId = 'new'; d.name = b.dataset.qname; d.q = ''; render(); };
+  const cs = document.getElementById('catsearch');
+  if (cs) {
+    cs.oninput = () => { keep(); d.q = cs.value; const pos = cs.selectionStart; render(); const n = document.getElementById('catsearch'); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch { } } };
+    if (d.q) cs.focus();
+  }
   for (const b of $app.querySelectorAll('[data-who]')) b.onclick = () => { keep(); d.seenBy = b.dataset.who; render(); };
+  for (const b of $app.querySelectorAll('[data-when]')) b.onclick = () => { keep(); d.timeMode = b.dataset.when; if (d.timeMode === 'now') { d.at = Date.now(); d.atFromPhoto = false; } render(); };
+  const wa = document.getElementById('whenat'); if (wa) wa.onchange = () => {
+    const t = L.fromLocalInput(wa.value);
+    if (t === null) return;
+    if (t > Date.now() + 60000) { d.at = Date.now(); d.whenNote = 'That time has not happened yet, so it is set to now.'; }
+    else { d.at = t; d.atFromPhoto = false; d.whenNote = ''; }
+    keep(); render();
+  };
+  document.getElementById('savenote').onclick = () => { keep(); d.timeMode = 'earlier'; render(); const w = document.getElementById('whenat'); if (w) { w.scrollIntoView({ block: 'center' }); w.focus(); try { w.showPicker(); } catch { } } };
   for (const b of $app.querySelectorAll('[data-in]')) b.onclick = () => { keep(); d.inside = b.dataset.in === '1'; render(); };
   for (const b of $app.querySelectorAll('[data-pet]')) b.onclick = () => { keep(); d.petted = b.dataset.pet === '1'; render(); };
   for (const b of $app.querySelectorAll('[data-coat]')) b.onclick = () => { keep(); const k = b.dataset.coat; d.coats = d.coats.includes(k) ? d.coats.filter(x => x !== k) : [...d.coats, k]; render(); };
@@ -505,7 +552,7 @@ function Repurrt() {
   const nm = document.getElementById('catname'); if (nm) nm.oninput = () => { d.name = nm.value; const s = document.getElementById('save'); if (d.catId === 'new') s.textContent = d.name.trim() ? `Save new cat: ${d.name.trim()}` : `Save new cat (Cat ${S.nextNum})`; };
   const ap = document.getElementById('addphoto'); if (ap) ap.onchange = async e => {
     const f = e.target.files && e.target.files[0]; if (!f) return; keep();
-    try { const nd = await draftFromFile(f); d.photo = nd.photo; d.noGpsInPhoto = nd.noGpsInPhoto; if (nd.source === 'exif') { d.lat = nd.lat; d.lng = nd.lng; d.source = 'exif'; d.at = nd.at; } render(); }
+    try { const nd = await draftFromFile(f); d.photo = nd.photo; d.noGpsInPhoto = nd.noGpsInPhoto; if (nd.source === 'exif') { d.lat = nd.lat; d.lng = nd.lng; d.source = 'exif'; } if (nd.atFromPhoto) { d.at = nd.at; d.atFromPhoto = true; d.timeMode = 'earlier'; } render(); }
     catch (x) { const er = document.getElementById('saveerr'); er.textContent = x.message; er.hidden = false; }
   };
   // another=true saves, then reopens Repurrt on the SAME photo, time and place, so only the next cat is picked.
@@ -794,6 +841,7 @@ function CatEntry(id) {
         <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.livesHere ? ' · 🏠 lives here' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
         <span class="tag ${esc(s.seenBy)}">${esc(s.spottedBy ? 'Spotted by ' + s.spottedBy : (PERSON[s.seenBy] || s.seenBy))}</span><span class="more" aria-hidden="true">⋯</span></button>
       ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
+        : S.timing === s.id ? `<div class="acts"><div class="label">When was this sighting?</div><input id="stimeat" class="field" type="datetime-local" value="${L.toLocalInput(s.at)}" max="${L.toLocalInput(Date.now())}" aria-label="When"><button class="primary" id="stimesave">Save time</button><button class="ghost" data-cancel>Cancel</button></div>`
         : S.focusing === s.id ? `<div class="acts"><div class="label">Tap the cat in the photo</div><div class="focusbox" id="focusbox"><img id="focusimg" alt="The full photo"><span class="focusdot" id="focusdot" hidden></span></div><div class="sub">Every square crop of this photo will centre on where you tap.</div><button class="ghost" data-cancel>Done</button></div>`
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
         : `<div class="acts">
@@ -801,6 +849,7 @@ function CatEntry(id) {
           ${hasPhoto ? `<button class="ghost" data-crop="${esc(s.photoId)}">✂️ Adjust crop</button>` : ''}
           ${hasPhoto ? `<button class="ghost" data-another="${esc(s.id)}">+ Another cat in this photo</button>` : ''}
           <button class="ghost" data-lives="${esc(s.id)}">${s.livesHere ? '🏠 Not its home: mark as Seen here' : '🏠 Lives here: set as its home'}</button>
+          <button class="ghost" data-stime="${esc(s.id)}">🕒 Change time</button>
           <button class="ghost" data-wrong="${esc(s.id)}">Wrong cat: move it</button>
           <button class="ghost danger" data-delsight="${esc(s.id)}">Delete this sighting</button>
           ${hasPhoto ? `<button class="ghost danger" data-delphoto="${esc(s.id)}">Delete just the photo</button>` : ''}</div>`) : ''}</div>`;
@@ -815,7 +864,7 @@ function CatEntry(id) {
       <a class="round lt" style="left:20px" href="#/catalogue" aria-label="Back to Catalogue">${I.back}</a>
       <button class="round lt" style="right:20px" id="fav" aria-label="${c.favourite ? 'Remove from favourites' : 'Add to favourites'}">${I.heart(c.favourite).replace('#B8BCC4', '#17181C')}</button>
       ${nameBlock}</div>
-    ${editForm}${!ed && home ? `<div class="pad"><div class="homeline">🏠 Home: ${esc(c.homeNote || 'pinned on the map')}${home.marked ? `<small>marked on the map${home.how ? ' · ' + esc((HOW.find(x => x[0] === home.how) || [, ''])[1].toLowerCase()) : ''}${e.count ? '' : ' · not logged yet'}</small><button class="ghost" id="unmarkhome">Not its home</button>` : ''}</div></div>` : ''}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
+    ${editForm}${!ed && home ? `<div class="pad"><div class="homeline">🏠 Home: ${esc(c.homeNote || 'pinned on the map')}${home.marked ? `<small>marked on the map${home.how ? ' · ' + esc((HOW.find(x => x[0] === home.how) || [, ''])[1].toLowerCase()) : ''}${e.count ? '' : ' · not logged yet'}</small><button class="ghost" id="unmarkhome">Not its home</button>` : ''}<button class="ghost" id="movehome">Move home</button></div></div>` : ''}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
@@ -842,7 +891,7 @@ function CatEntry(id) {
   if (rn) rn.onsubmit = ev => { ev.preventDefault(); const v = document.getElementById('rnin').value.trim(); S.renaming = null; if (v !== (c.name || '')) saveCat(id, { name: v }, v ? `Renamed to ${v}` : `Name cleared, back to Cat ${c.num || ''}`.trim()); else render(); };
   const sOf = sid => e.sightings.find(x => x.id === sid);
   for (const b of $app.querySelectorAll('[data-row]')) b.onclick = () => { S.rowOpen = S.rowOpen === b.dataset.row ? null : b.dataset.row; S.moving = null; S.placingSight = null; render(); };
-  for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; S.focusing = null; render(); };
+  for (const b of $app.querySelectorAll('[data-cancel]')) b.onclick = () => { S.moving = null; S.merging = null; S.confirmDel = null; S.rowOpen = null; S.placingSight = null; S.focusing = null; S.timing = null; render(); };
   for (const b of $app.querySelectorAll('[data-focus]')) b.onclick = () => { S.focusing = b.dataset.focus; render(); };
   for (const b of $app.querySelectorAll('[data-crop]')) b.onclick = () => { S.cropReturn = 'cat/' + id; go('crop/' + b.dataset.crop); };
   for (const b of $app.querySelectorAll('[data-galto]')) b.onclick = () => { S.galIdx = +b.dataset.galto; go('photos/' + id); };
@@ -921,11 +970,20 @@ function CatEntry(id) {
   const mg = document.getElementById('merge'); if (mg) mg.onclick = () => { S.merging = id; render(); };
   for (const b of $app.querySelectorAll('[data-mergein]')) b.onclick = () => act(async () => { const msg = await mergeCats(id, b.dataset.mergein); S.merging = null; return msg; });
   const dc = document.getElementById('delcat'); if (dc) dc.onclick = () => { S.confirmDel = id; render(); };
+  for (const b of $app.querySelectorAll('[data-stime]')) b.onclick = () => { S.timing = b.dataset.stime; render(); };
+  const sts = document.getElementById('stimesave'); if (sts) sts.onclick = () => {
+    const t = L.fromLocalInput(document.getElementById('stimeat').value), sid = S.timing;
+    if (t === null) return;
+    if (t > Date.now() + 60000) { S.toast = 'That time has not happened yet'; return render(); }
+    act(async () => { await S.store.patch('sightings', sid, { at: t }); S.timing = null; S.rowOpen = null; return `🕒 Time changed to ${L.longStamp(t)}`; });
+  };
+  const mh = document.getElementById('movehome'); if (mh) mh.onclick = () => { S.moveHomeOf = id; go('map'); };
   const um = document.getElementById('unmarkhome'); if (um && home && home.marked) um.onclick = () => saveCat(id, { homesMarked: (c.homesMarked || []).map((h, i) => i === home.index ? { ...h, removed: true, removedAt: Date.now(), removedBy: S.me || 'unknown' } : h) }, '🏠 Home removed');
   const dy = document.getElementById('delcatyes'); if (dy) dy.onclick = () => act(async () => { await S.store.patch('cats', id, { deleted: true, ...stamp() }); S.confirmDel = null; go('catalogue'); return `${L.displayName(c)} deleted · Restore it from Recently deleted`; });
 
   // Territory map: only clean pins, and a failure shows on the map box instead of breaking the page.
   const pts = e.sightings.filter(L.hasPin).map(s => [s.lat, s.lng]);
+  if (home && !pts.length) pts.push([home.lat, home.lng]);
   const tmap = document.getElementById('tmap');
   if (!pts.length) { tmap.remove(); return; }
   guardMap(tmap, 'territory map', () => {
@@ -969,6 +1027,16 @@ function livesHereSheet(m, at) {
     wireDice(sheet);
   };
   draw();
+}
+async function moveHomes(cats, dLat, dLng) {
+  const by = S.me || 'unknown', now = Date.now();
+  for (const w of L.homeMoves(cats, dLat, dLng, by, now)) {
+    if (w.kind === 'marked') await S.store.patch('cats', w.catId, { homesMarked: w.homesMarked });
+    else await S.store.patch('sightings', w.sightingId, { lat: w.lat, lng: w.lng, movedFrom: w.from, movedAt: now, movedBy: by });
+  }
+  const h0 = cats.map(e => L.homeOf(e)).find(Boolean);
+  const metresMoved = h0 ? Math.round(L.metres(h0, { lat: h0.lat + dLat, lng: h0.lng + dLng })) : 0;
+  return `🏠 ${cats.length === 1 ? 'Home' : 'House'} moved ${metresMoved} m`;
 }
 async function saveMarkedHome(d, place) {
   const entry = { lat: place.lat, lng: place.lng, how: d.how, at: Date.now(), by: S.me || 'unknown' };

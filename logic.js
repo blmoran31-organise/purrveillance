@@ -479,3 +479,28 @@ export function planWalk(summaries, origin, minutes, now, opts = {}) {
   return planOnTable(points, nCands, straightTable(points), minutes, opts);
 }
 export const minHHMM = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+
+// REPURRT SEARCH (Beth 2026-10-05): every live cat, by name, its number ("12" finds Cat 12), coat and markings.
+// Returns the matching summaries; the caller orders them nearest first.
+export function searchCats(summaries, q) {
+  const t = String(q || '').trim().toLowerCase(); if (!t) return [];
+  const words = t.split(/\s+/);
+  return summaries.filter(e => {
+    const c = e.cat, hay = [c.name, displayName(c), c.num ? String(c.num) : '', coatText(coatsOf(c), isLongHaired(c)), c.coat, c.markings, ...(c.aliases || [])].filter(Boolean).join(' ').toLowerCase();
+    return words.every(w => /^\d+$/.test(w) ? String(c.num || '') === w || hay.split(/\W+/).includes(w) : hay.includes(w));
+  });
+}
+// The phone's date-and-time picker speaks local "YYYY-MM-DDTHH:MM"; the log speaks milliseconds.
+export function toLocalInput(t) { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; }
+export function fromLocalInput(s) { const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(s || ''); return m ? new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() : null; }
+// MOVE A HOUSE (Beth 2026-10-05): every home in the household shifts by the same amount, so homes keep their spacing.
+// Returns the writes to make: { kind: 'marked', catId, homesMarked } or { kind: 'sighting', sightingId, lat, lng, from }.
+export function homeMoves(summaries, dLat, dLng, by, now) {
+  const out = [];
+  for (const e of summaries) {
+    const h = homeOf(e); if (!h) continue;
+    if (h.marked) out.push({ kind: 'marked', catId: e.cat.id, homesMarked: e.cat.homesMarked.map((m, i) => i === h.index ? { ...m, lat: m.lat + dLat, lng: m.lng + dLng, movedFrom: { lat: m.lat, lng: m.lng }, movedAt: now, movedBy: by } : m) });
+    else out.push({ kind: 'sighting', sightingId: h.sightingId, lat: h.lat + dLat, lng: h.lng + dLng, from: { lat: h.lat, lng: h.lng } });
+  }
+  return out;
+}

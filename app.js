@@ -16,7 +16,7 @@ const LS = {
 const S = {
   store: null, house: null, me: LS.get('me'), data: { cats: [], sightings: [] }, sums: [], byId: new Map(),
   pos: null, posAt: 0, maps: [], stream: null, draft: null, filter: 'all', period: LS.get('period') || 'week',
-  renaming: null, error: null, toast: null, showAllChips: false,
+  renaming: null, error: null, toast: null, showAllChips: false, mapMode: LS.get('mapmode') || 'all',
 };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -166,7 +166,7 @@ function render() {
 const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted'];
 const VIEW_HIDE = ['.logs', '.who', '.hint', '#nudge', '.camfab', '#nophoto', '.binlink', '#pencil', '#fav', '#editdetails', '#delcat', '#delcatyes', '#merge', '#addphoto',
   '#gprofile', '#glives', '#gcrop', '#ganother', '#gwrong', '.srow2 .acts', '[data-delsight]', '[data-delphoto]', '[data-crop]', '[data-lives]', '[data-wrong]', '[data-another]', '[data-moveto]',
-  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard'].join(',');
+  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet'].join(',');
 
 // ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
 // Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
@@ -249,45 +249,71 @@ function catPinHtml(cat, label, home) {
   const fill = !set && L.isUnnamed(cat) ? 'var(--moss)' : swatch(cat);
   return `<div class="pin ${pid ? 'photo' : ''} ${L.whiteRing(cat) ? 'ring' : ''}"><i style="background-color:${fill};${pid ? `border-color:${swatch(cat)}` : ''}"${pid ? ` data-photo="${esc(pid)}"` : ''}><em class="ini">${esc(L.initial(cat))}</em></i>${home ? '<b class="hb">🏠</b>' : ''}<span>${esc(label)}</span></div>`;
 }
-function householdHtml(cats) {
-  const faces = cats.slice(0, 3).map(e => { const pid = catPhotoId(e.cat); return `<i style="background-color:${swatch(e.cat)};border-color:${swatch(e.cat)}"${pid ? ` data-photo="${esc(pid)}"` : ''}><em class="ini">${esc(L.initial(e.cat))}</em></i>`; }).join('');
-  return `<div class="pin house"><div class="stackfaces">${faces}</div><b class="hb">🏠</b><b class="hcount">${cats.length}</b><span>Household (${cats.length})</span></div>`;
+// HOMES (Beth 2026-10-05, edits the 2026-10-04 household marker): every home is a house OUTLINE with the cat count
+// inside it. Dashed amber when every cat in it is unmatched (marked from the map, never logged yet).
+function houseHtml(n, unmatched) {
+  return `<div class="pin house2 ${unmatched ? 'unmatched' : ''}"><svg viewBox="0 0 44 44" width="44" height="44" aria-hidden="true"><path d="M5 21 L22 6 L39 21 V39 H5 Z" fill="#FFFFFF" stroke="${unmatched ? 'var(--marigold)' : 'var(--moss)'}" stroke-width="3.5" stroke-linejoin="round"${unmatched ? ' stroke-dasharray="5 4"' : ''}/></svg><b class="hnum">${n}</b></div>`;
 }
 function MeowMap() {
   const n = S.sums.filter(e => e.count).length;
   $app.innerHTML = `${banner()}<div class="screen" style="overflow:hidden">
     <div class="head"><div><div class="title">MEOW MAP</div><div class="sub" id="mapsub">${n} cat${n === 1 ? '' : 's'} · ${S.data.sightings.length} sighting${S.data.sightings.length === 1 ? '' : 's'} · finding you…</div></div>
       <a href="#/catflap" class="av ${S.me === 'beth' ? 'beth' : ''}" style="width:44px;height:44px;border-radius:22px">${S.me ? PERSON[S.me][0] : '?'}</a></div>
+    <div class="seg small mapfilter">${[['all', 'All'], ['homes', 'Homes'], ['sightings', 'Sightings']].map(([k, t]) => `<button data-mapmode="${k}" class="${S.mapMode === k ? 'on' : ''}">${t}</button>`).join('')}</div>
     <div class="mapwrap"><div id="map" style="position:absolute;inset:0"></div>
       <a class="camfab" href="#/camera" aria-label="Spotted one: open Pawparazzi">${I.camera}</a>
+      <div class="hstrip" id="hstrip" hidden></div><div class="livesheet" id="livesheet" hidden></div>
+      ${S.view ? '' : '<div class="lphint" id="lphint">Press and hold the map to mark where a cat lives</div>'}
       <div class="near" id="near"><div class="label">Near you</div><div class="sub">Finding your position…</div></div></div>
   </div>
   ${nav('map')}`;
+  for (const b of $app.querySelectorAll('[data-mapmode]')) b.onclick = () => { S.mapMode = b.dataset.mapmode; LS.set('mapmode', S.mapMode); render(); };
   const mapEl = document.getElementById('map');
   const m = guardMap(mapEl, 'meow map', () => makeMap(mapEl));
   const fallback = lastKnownPlace();
   if (m) guardMap(mapEl, 'meow map view', () => { if (fallback) m.setView([fallback.lat, fallback.lng], 16); else m.setView([54.5, -3], 5); });
   const placed = [];   // { marker, at: [lat, lng], r: half-width in px }
+  const mode = S.mapMode;
   if (m) {
+    // All: homes as houses, every other cat at its latest sighting. Homes: houses only. Sightings: every cat at its
+    // latest sighting, no houses.
     const homed = new Set();
-    for (const h of L.households(S.sums)) {
+    const hh = mode === 'sightings' ? [] : L.households(S.sums);
+    const fan = window.L.layerGroup().addTo(m);
+    let open = null;   // the household whose cats are fanned out
+    const strip = document.getElementById('hstrip');
+    const closeFan = () => { open = null; fan.clearLayers(); if (strip) strip.hidden = true; };
+    // Tap a house: its cats' circles fan out round it, each one tappable to the cat's page (replaces the mini list).
+    const drawFan = () => {
+      fan.clearLayers(); if (!open) return;
+      // Up to 5 cats on an arc ABOVE the house so its count stays visible; more go on a full ring round it.
+      // Neighbours sit at least 108 px apart so their names (up to 96 px) never overlap.
+      const c = m.latLngToLayerPoint([open.lat, open.lng]), n = open.cats.length, arc = n <= 5;
+      const span = arc ? Math.min(0.9, 0.6 * (n - 1)) : 2, step = n === 1 ? 0 : (arc ? span / (n - 1) : 2 / n) * Math.PI;
+      const R = Math.max(78, step ? 54 / Math.sin(step / 2) : 0);
+      open.cats.forEach((e, i) => {
+        const t = arc ? -Math.PI / 2 - (span * Math.PI) / 2 + step * i : -Math.PI / 2 + step * i;
+        const ll = m.layerPointToLatLng(window.L.point(c.x + R * Math.cos(t), c.y + R * Math.sin(t)));
+        window.L.polyline([[open.lat, open.lng], ll], { color: '#2F6B4F', weight: 1.5, opacity: 0.6, interactive: false }).addTo(fan);
+        const mk = window.L.marker(ll, { icon: divIcon(catPinHtml(e.cat, L.displayName(e.cat), false).replace('class="pin ', `class="pin fanned ${L.homeUnmatched(e) ? 'unmatched' : ''} `)), zIndexOffset: 2000 }).addTo(fan);
+        mk.on('click', () => go('cat/' + e.cat.id));
+      });
+      hydratePhotos(m.getContainer());
+    };
+    for (const h of hh) {
       for (const e of h.cats) homed.add(e.cat.id);
-      guardMap(null, 'household', () => {
-        if (h.cats.length === 1) {
-          const e = h.cats[0];
-          const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(catPinHtml(e.cat, `${L.displayName(e.cat)} · ${e.count}`, true)) }).addTo(m);
-          mk.on('click', () => go('cat/' + e.cat.id));
-          placed.push({ marker: mk, at: [h.lat, h.lng], r: 24 });
-        } else {
-          const list = `<div class="hhlist"><b>🏠 Household (${h.cats.length})</b>${h.cats.map(e => `<a href="#/cat/${esc(e.cat.id)}"><i style="background-color:${swatch(e.cat)}"${photoAttr(e.cat)}></i>${esc(L.displayName(e.cat))}<small>${e.count}</small></a>`).join('')}</div>`;
-          const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(householdHtml(h.cats)) }).addTo(m).bindPopup(list, { closeButton: false, offset: [0, -26] });
-          mk.on('popupopen', ev => hydratePhotos(ev.popup.getElement()));
-          placed.push({ marker: mk, at: [h.lat, h.lng], r: 12 + 12 * Math.min(3, h.cats.length) });
-        }
+      guardMap(null, 'home', () => {
+        const mk = window.L.marker([h.lat, h.lng], { icon: divIcon(houseHtml(h.cats.length, h.cats.every(L.homeUnmatched))), zIndexOffset: 500 }).addTo(m);
+        mk.on('click', () => {
+          if (open === h) return closeFan();
+          open = h; drawFan();
+          if (strip) { const street = h.cats.map(e => e.cat.homeNote).find(Boolean); strip.innerHTML = `<b>🏠 Household (${h.cats.length})</b>${street ? `<span>${esc(street)}</span>` : ''}<button aria-label="Close" id="hsclose">✕</button>`; strip.hidden = false; document.getElementById('hsclose').onclick = closeFan; }
+        });
+        placed.push({ marker: mk, at: [h.lat, h.lng], r: 22 });
       });
     }
-    for (const e of S.sums) {
-      if (homed.has(e.cat.id)) continue;
+    if (mode !== 'homes') for (const e of S.sums) {
+      if (mode !== 'sightings' && homed.has(e.cat.id)) continue;
       const p = L.lastPosition(e); if (!p) continue;
       guardMap(null, 'pin ' + e.cat.id, () => {
         const mk = window.L.marker([p.lat, p.lng], { icon: divIcon(catPinHtml(e.cat, `${L.displayName(e.cat)} · ${e.count}`, false)) }).addTo(m);
@@ -311,9 +337,14 @@ function MeowMap() {
         } else x.marker.setLatLng(x.at);
         const el = x.marker.getElement(); if (el) el.classList.toggle('crowded', out[i].crowded);
       });
+      drawFan();
     });
     layout();
     m.on('zoomend', layout);
+    m.on('click', closeFan);
+    // Long-press (or right-click) anywhere: "A cat lives here", for a cat in a window, a cat tree, or one you were
+    // told about. No photo, no sighting. Not on a view-only link.
+    if (!S.view) m.on('contextmenu', ev => { closeFan(); livesHereSheet(m, ev.latlng); });
   }
   getPos().then(pos => {
     if (!document.getElementById('map')) return;
@@ -738,7 +769,7 @@ function CatEntry(id) {
       <div class="stack8"><div class="label">Collar</div><div class="seg small"><button data-ecollar="0" class="${!ed.collar ? 'on' : ''}">None</button><button data-ecollar="1" class="${ed.collar ? 'on' : ''}">Yes</button></div>
         ${ed.collar ? `<input id="ecolour" class="field" value="${esc(ed.collarColour)}" placeholder="Colour, e.g. red with a bell">` : ''}</div>
       <div class="stack8"><div class="label">Friendliness</div><div class="seg small wrap4">${FRIENDLY.map(k => `<button data-efriend="${k}" class="${ed.friendliness === k ? 'on' : ''}">${k}</button>`).join('')}</div></div>
-      <div class="stack8"><label class="label" for="ehome">Home</label>${home ? `<div class="sub">🏠 Home pin set from the ${esc(L.longStamp(home.at))} sighting</div>` : ''}<input id="ehome" class="field" value="${esc(ed.homeNote)}" placeholder="e.g. number 27, goes in the catflap"></div>
+      <div class="stack8"><label class="label" for="ehome">Home</label>${home ? `<div class="sub">🏠 ${home.marked ? `Home marked on the map ${esc(L.longStamp(home.at))}` : `Home pin set from the ${esc(L.longStamp(home.at))} sighting`}</div>` : ''}<input id="ehome" class="field" value="${esc(ed.homeNote)}" placeholder="e.g. number 27, goes in the catflap"></div>
       <div class="stack8"><label class="label" for="enotes">Notes</label><textarea id="enotes" class="field" placeholder="anything else">${esc(ed.notes)}</textarea></div>
       <button class="primary" id="esave">Save details</button><button class="ghost" id="ecancel">Cancel</button></div>` : '';
   const others = S.sums.filter(x => x.cat.id !== id).sort((a, b) => (b.last || 0) - (a.last || 0));
@@ -773,7 +804,7 @@ function CatEntry(id) {
       <a class="round lt" style="left:20px" href="#/catalogue" aria-label="Back to Catalogue">${I.back}</a>
       <button class="round lt" style="right:20px" id="fav" aria-label="${c.favourite ? 'Remove from favourites' : 'Add to favourites'}">${I.heart(c.favourite).replace('#B8BCC4', '#17181C')}</button>
       ${nameBlock}</div>
-    ${editForm}${!ed && home ? `<div class="pad"><div class="homeline">🏠 Home: ${esc(c.homeNote || 'pinned on the map')}</div></div>` : ''}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
+    ${editForm}${!ed && home ? `<div class="pad"><div class="homeline">🏠 Home: ${esc(c.homeNote || 'pinned on the map')}${home.marked ? `<small>marked on the map${home.how ? ' · ' + esc((HOW.find(x => x[0] === home.how) || [, ''])[1].toLowerCase()) : ''}${e.count ? '' : ' · not logged yet'}</small><button class="ghost" id="unmarkhome">Not its home</button>` : ''}</div></div>` : ''}${!ed && c.notes ? `<div class="pad"><div class="aboutnote">${esc(c.notes)}</div></div>` : ''}
     <div class="tiles3"><div class="stat"><b>${e.count}</b><small>sighting${e.count === 1 ? '' : 's'}</small></div><div class="stat"><b>${days}d</b><small>since first</small></div><div class="stat"><b>${e.petted}</b><small>Purrometer</small></div></div>
     <div class="pad stack8" style="padding-top:16px"><div class="label">Territory</div>
       <div class="terr"><div id="tmap" style="position:absolute;inset:0"></div><div class="cap">${terr.pins ? `${terr.pins} pin${terr.pins === 1 ? '' : 's'}${terr.pins > 1 ? `, all within ${L.distWord(terr.radius)}` : ''}` : 'No pins yet'}</div></div></div>
@@ -879,6 +910,7 @@ function CatEntry(id) {
   const mg = document.getElementById('merge'); if (mg) mg.onclick = () => { S.merging = id; render(); };
   for (const b of $app.querySelectorAll('[data-mergein]')) b.onclick = () => act(async () => { const msg = await mergeCats(id, b.dataset.mergein); S.merging = null; return msg; });
   const dc = document.getElementById('delcat'); if (dc) dc.onclick = () => { S.confirmDel = id; render(); };
+  const um = document.getElementById('unmarkhome'); if (um && home && home.marked) um.onclick = () => saveCat(id, { homesMarked: (c.homesMarked || []).map((h, i) => i === home.index ? { ...h, removed: true, removedAt: Date.now(), removedBy: S.me || 'unknown' } : h) }, '🏠 Home removed');
   const dy = document.getElementById('delcatyes'); if (dy) dy.onclick = () => act(async () => { await S.store.patch('cats', id, { deleted: true, ...stamp() }); S.confirmDel = null; go('catalogue'); return `${L.displayName(c)} deleted · Restore it from Recently deleted`; });
 
   // Territory map: only clean pins, and a failure shows on the map box instead of breaking the page.
@@ -892,6 +924,53 @@ function CatEntry(id) {
     if (home) window.L.marker([home.lat, home.lng], { icon: divIcon(`<div class="homepin" style="background:${swatch(c)}">🏠</div>`), interactive: false }).addTo(m);
     if (pts.length > 1 && terr.centre) window.L.circle([terr.centre.lat, terr.centre.lng], { radius: Math.max(terr.radius, 15), stroke: false, fillColor: swatch(c), fillOpacity: 0.18 }).addTo(m);
   });
+}
+
+// "A CAT LIVES HERE" from the map (Beth 2026-10-05): a draggable pin and a sheet. Name a new cat, or pick one already
+// logged (nearest first); Looks like; How you know. Saved to cat.homesMarked as a home with no photo and no sighting.
+const HOW = [['window', 'In the window'], ['tree', 'Cat tree'], ['told', 'Told me']];
+function livesHereSheet(m, at) {
+  const sheet = document.getElementById('livesheet'); if (!sheet) return;
+  const hint = document.getElementById('lphint'); if (hint) hint.hidden = true;
+  const d = { lat: at.lat, lng: at.lng, catId: 'new', name: '', coats: [], longHaired: false, how: 'window' };
+  const pin = window.L.marker(at, { draggable: true, zIndexOffset: 3000, icon: divIcon(houseHtml('+', true)) }).addTo(m);
+  pin.on('dragend', () => { const p = pin.getLatLng(); d.lat = p.lat; d.lng = p.lng; });
+  const dist = e => { let best = Infinity; for (const s of e.sightings) if (L.hasPin(s)) best = Math.min(best, L.metres(d, s)); const h = L.homeOf(e); if (h) best = Math.min(best, L.metres(d, h)); return best; };
+  const cats = S.sums.slice().sort((a, b) => dist(a) - dist(b));
+  const close = () => { pin.remove(); sheet.hidden = true; sheet.innerHTML = ''; };
+  const draw = () => {
+    const isNew = d.catId === 'new';
+    sheet.innerHTML = `<div class="lshead"><b>🏠 A cat lives here</b><small>drag the house to move it</small></div>
+      <label class="label" for="hcat">Which cat</label>
+      <select id="hcat" class="field"><option value="new"${isNew ? ' selected' : ''}>+ A new cat</option>${cats.map(e => { const k = dist(e); return `<option value="${esc(e.cat.id)}"${d.catId === e.cat.id ? ' selected' : ''}>${esc(L.displayName(e.cat))}${Number.isFinite(k) ? ' · ' + esc(L.distWord(k)) : ''}</option>`; }).join('')}</select>
+      ${isNew ? `<label class="label" for="hname">Name (leave blank for a number)</label><div class="namerow"><input id="hname" class="field" value="${esc(d.name)}" placeholder="e.g. Window Tabby">${diceBtn('#hname', d.coats)}</div>
+      <div class="label">Looks like</div><div class="coats">${L.COAT_LIST.map(c => `<button data-hcoat="${c}" class="${d.coats.includes(c) ? 'on' : ''}">${c}</button>`).join('')}<button data-hlong class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div>` : ''}
+      <div class="label">How you know</div><div class="seg small">${HOW.map(([k, t]) => `<button data-how="${k}" class="${d.how === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <div class="lsbtns"><button class="ghost" id="hcancel">Cancel</button><button class="primary" id="hsave">Save home</button></div>`;
+    sheet.hidden = false;
+    const keep = () => { const n = document.getElementById('hname'); if (n) d.name = n.value; };
+    document.getElementById('hcat').onchange = ev => { keep(); d.catId = ev.target.value; draw(); };
+    for (const b of sheet.querySelectorAll('[data-hcoat]')) b.onclick = () => { keep(); const c = b.dataset.hcoat; d.coats = d.coats.includes(c) ? d.coats.filter(x => x !== c) : [...d.coats, c]; draw(); };
+    const lh = sheet.querySelector('[data-hlong]'); if (lh) lh.onclick = () => { keep(); d.longHaired = !d.longHaired; draw(); };
+    for (const b of sheet.querySelectorAll('[data-how]')) b.onclick = () => { keep(); d.how = b.dataset.how; draw(); };
+    document.getElementById('hcancel').onclick = close;
+    document.getElementById('hsave').onclick = () => { keep(); const place = { lat: d.lat, lng: d.lng }; close(); act(() => saveMarkedHome(d, place)); };
+    wireDice(sheet);
+  };
+  draw();
+}
+async function saveMarkedHome(d, place) {
+  const entry = { lat: place.lat, lng: place.lng, how: d.how, at: Date.now(), by: S.me || 'unknown' };
+  let id = d.catId, name;
+  if (id === 'new') {
+    id = newId(); const doc = newCatDoc(id, d.name, d.coats, d.longHaired);
+    await S.store.put('cats', id, { ...doc, homesMarked: [entry] }); name = L.displayName(doc);
+  } else {
+    const c = S.byId.get(id)?.cat;
+    await S.store.patch('cats', id, { homesMarked: [...(c?.homesMarked || []), entry] }); name = L.displayName(c);
+  }
+  fillHome(id, place);
+  return `🏠 Home saved for ${name}`;
 }
 
 // Lives here: when the cat's Home is still empty, fill it with the street from OpenStreetMap's free address lookup.
@@ -954,6 +1033,7 @@ async function mergeCats(keepId, loserId) {
   if (!photoOk(keep.cat.thumbPhotoId) && catPhotoId(lose.cat)) patch.thumbPhotoId = catPhotoId(lose.cat);
   if (!keep.cat.favourite && lose.cat.favourite) patch.favourite = true;
   patch.aliases = [...(keep.cat.aliases || []), L.displayName(lose.cat)];
+  if ((lose.cat.homesMarked || []).length) patch.homesMarked = [...(keep.cat.homesMarked || []), ...lose.cat.homesMarked.map(h => ({ ...h, fromCat: loserId }))];
   await S.store.patch('cats', keepId, patch);
   await S.store.patch('cats', loserId, { mergedInto: keepId, mergedAt: Date.now(), mergedBy: S.me || 'unknown' });
   return `Merged ${L.displayName(lose.cat)} into ${patch.name || L.displayName(keep.cat)} · Undo it from Recently deleted`;
@@ -961,6 +1041,8 @@ async function mergeCats(keepId, loserId) {
 async function unmerge(loserId) {
   const lose = S.raw.cats.find(c => c.id === loserId);
   for (const s of S.raw.sightings.filter(s => s.mergedFrom === loserId && s.catId === lose.mergedInto)) await S.store.patch('sightings', s.id, { catId: loserId, mergedFrom: null });
+  const keep = S.raw.cats.find(c => c.id === lose.mergedInto);
+  if (keep && (keep.homesMarked || []).some(h => h.fromCat === loserId)) await S.store.patch('cats', keep.id, { homesMarked: keep.homesMarked.filter(h => h.fromCat !== loserId) });
   await S.store.patch('cats', loserId, { mergedInto: null, unmergedAt: Date.now() });
   return `${L.displayName(lose)} is its own cat again`;
 }

@@ -344,3 +344,26 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .sharecard .primary small { font-size: 12px; font-weight: 400; opacity: 0.85; }
 .sharecard .primary.ghostish { background: var(--ink); }
 .sharecard .box { margin-top: 6px; word-break: break-all; font-size: 12px; }
+
+/* Homes layer (2026-10-05): house outline with the count inside, filter chips, fanned cats, A cat lives here */
+.mapfilter { margin: 0 12px 10px; }
+.pin.house2 { width: 44px; height: 44px; transform: translate(-50%, -26px); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.25)); }
+.pin.house2 svg { display: block; position: relative; z-index: 1; }
+.pin.house2 .hnum { z-index: 2; }
+.pin.fanned span { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.pin.house2 .hnum { position: absolute; left: 0; right: 0; top: 19px; text-align: center; font-size: 15px; font-weight: 700; color: var(--moss); line-height: 1; }
+.pin.house2.unmatched .hnum { color: #9A6A1E; }
+.pin.fanned i { width: 40px; height: 40px; }
+.pin.unmatched i { border-style: dashed; border-color: var(--marigold); }
+.hstrip { position: absolute; left: 12px; right: 80px; top: 12px; z-index: 650; background: var(--ground); border-radius: 14px; padding: 10px 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.14); display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.hstrip span { color: var(--caption); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hstrip b { white-space: nowrap; }
+.hstrip button { margin-left: auto; border: 0; background: var(--surface); border-radius: 12px; width: 32px; height: 32px; font-size: 14px; }
+.livesheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 700; background: var(--ground); border-radius: 20px 20px 0 0; padding: 16px; box-shadow: 0 -6px 24px rgba(0,0,0,0.18); display: flex; flex-direction: column; gap: 8px; max-height: 78%; overflow-y: auto; }
+.livesheet .lshead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.livesheet .lshead small { color: var(--caption); font-size: 12px; }
+.livesheet .lsbtns { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; margin-top: 6px; }
+.livesheet .lsbtns .primary { height: 48px; }
+.lphint { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 96px); z-index: 550; background: rgba(23,24,28,0.78); color: #FFFFFF; font-size: 12px; padding: 5px 10px; border-radius: 10px; pointer-events: none; }
+.homeline small { display: block; font-weight: 400; color: var(--caption); margin-top: 2px; }
+.homeline .ghost { margin-top: 8px; }

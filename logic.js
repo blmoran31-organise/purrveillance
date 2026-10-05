@@ -53,11 +53,19 @@ export function swatchFromCoats(coats, id, longHaired) {
 }
 export function whiteRing(cat) { const c = coatsOf(cat); return c.includes('White') && c.some(x => x !== 'White'); }
 // A cat's home: its latest "Lives here" sighting that has a place. Latest wins.
+// A cat's home: the latest of its Lives-here sightings and the homes marked on the map with no photo
+// (cat.homesMarked, Beth 2026-10-05 "a cat lives here"). A marked home is NOT a sighting: it never counts in stats.
 export function homeOf(summary) {
   let h = null;
   for (const s of summary.sightings) if (s.livesHere && hasPin(s) && (!h || s.at > h.at)) h = { lat: s.lat, lng: s.lng, at: s.at, sightingId: s.id };
+  for (const [i, m] of (summary.cat.homesMarked || []).entries()) {
+    const p = m && !m.removed ? cleanPlace(m.lat, m.lng) : null;
+    if (p && (!h || (m.at || 0) > h.at)) h = { lat: p.lat, lng: p.lng, at: m.at || 0, marked: true, how: m.how || '', index: i };
+  }
   return h;
 }
+// A home marked for a cat that has never been logged (Beth: dashed amber until it is logged or merged).
+export const homeUnmatched = summary => summary.count === 0 && !!homeOf(summary);
 const FALLBACK = ['#2F6B4F', '#E9A23B', '#D9641E', '#8A8F99', '#17181C', '#9A6B3F'];
 export function swatchFor(coat, id = '') {
   for (const [re, hex] of SWATCH) if (re.test(coat || '')) return hex;

@@ -30,13 +30,15 @@ export async function viewCodeFor(house) {
 export const isViewCode = v => /^[0-9a-f]{64}$/.test(v || '');
 
 // house: the full house code (can change things). view: a view code (read only). Give one, not both.
-export async function openStore(house, { demo = false, view = null, onStatus = () => {} } = {}) {
-  return demo ? demoStore(house) : firebaseStore(house, view, onStatus);
+// guest: the guest code, given with a view code (a guest link); the store is read only apart from drop().
+export async function openStore(house, { demo = false, view = null, guest = null, onStatus = () => {} } = {}) {
+  return demo ? demoStore(house) : firebaseStore(house, view, onStatus, guest);
 }
+export const isGuestCode = g => /^[a-z0-9]{24}$/.test(g || '');
 
 const READ_ONLY = Object.assign(new Error('This is a view-only link: nothing can be added or changed.'), { code: 'view-only' });
 
-async function firebaseStore(house, view, onStatus) {
+async function firebaseStore(house, view, onStatus, guest) {
   const [{ initializeApp }, auth, fs] = await Promise.all([
     import(FB + 'firebase-app.js'), import(FB + 'firebase-auth.js'), import(FB + 'firebase-firestore.js')]);
   const app = initializeApp(firebaseConfig);
@@ -46,6 +48,9 @@ async function firebaseStore(house, view, onStatus) {
   const readOnly = !house;
   const root = readOnly ? view : await viewCodeFor(house);
   if (!readOnly) await joinHouse(fs, db, a.currentUser.uid, house, root, onStatus);
+  // A guest joins with the guest code; a code that has been replaced is refused here and the guest stays view-only.
+  let guestOk = false;
+  if (readOnly && guest) { try { await fs.setDoc(fs.doc(db, 'houses', root, 'guests', a.currentUser.uid), { key: guest, at: Date.now() }); guestOk = true; } catch (e) { console.warn('guest join refused', e.code); } }
   const col = name => fs.collection(db, 'houses', root, name);
   const state = { cats: [], sightings: [], ready: { cats: false, sightings: false } };
   const subs = new Set();
@@ -59,7 +64,19 @@ async function firebaseStore(house, view, onStatus) {
   }
   const photoCache = new Map();
   return {
-    mode: 'firebase', readOnly, viewCode: root,
+    mode: 'firebase', readOnly, viewCode: root, guestOk,
+    // GUEST: one new cat into the Guest drops queue. Everything else stays refused.
+    async drop(data) { if (!guestOk && readOnly) throw READ_ONLY; const id = newId(); await fs.setDoc(fs.doc(db, 'houses', root, 'drops', id), data); return id; },
+    // HOUSE phones: the guest code (made on first ask), a fresh one (old guest links stop adding), and the queue.
+    async guestKey(fresh = false) {
+      if (readOnly) throw READ_ONLY;
+      const ref = fs.doc(db, 'houses', root, 'meta', 'guestkey');
+      if (!fresh) { const d = await fs.getDoc(ref); if (d.exists()) return d.data().key; }
+      const abc = 'abcdefghjkmnpqrstuvwxyz23456789', r = new Uint8Array(24); crypto.getRandomValues(r);
+      const key = [...r].map(b => abc[b % abc.length]).join('');
+      await fs.setDoc(ref, { key, at: Date.now() }); return key;
+    },
+    watchDrops(f) { if (readOnly) return () => {}; return fs.onSnapshot(fs.collection(db, 'houses', root, 'drops'), snap => f(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err => console.warn('drops', err.code)); },
     subscribe(f) { subs.add(f); if (state.ready.cats && state.ready.sightings) f({ cats: state.cats, sightings: state.sightings }); else if (lastError) f(null, lastError); return () => subs.delete(f); },
     async put(name, id, data) { if (readOnly) throw READ_ONLY; await fs.setDoc(fs.doc(db, 'houses', root, name, id), data); return id; },
     // A changed photo (focal point, delete) must not be served from the cache afterwards.

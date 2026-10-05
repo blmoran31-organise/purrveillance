@@ -2,7 +2,7 @@
 // Screens follow docs/mockups: Catflap, Meow Map, Pawparazzi, Repurrt, The Catalogue, Catalogue entry, Meowmentum.
 
 import * as L from './logic.js';
-import { openStore, configured, newId, newHouseCode, isViewCode } from './store.js';
+import { openStore, configured, newId, newHouseCode, isViewCode, isGuestCode } from './store.js';
 import { randomName } from './names.js';
 
 const $app = document.getElementById('app');
@@ -50,6 +50,7 @@ function nav(on) {
 function banner() {
   if (S.error) return `<div class="banner">Can't reach the shared log (${esc(S.error)}). Check signal; nothing new will save until it's back.</div>`;
   if (DEMO) return '<div class="banner">DEMO: sample cats on this phone only, not shared</div>';
+  if (S.guest) return `<div class="banner view">👋 Guest link: look around, and send Beth any new cat you spot${S.store && !S.store.guestOk ? ' (adding is switched off for this link)' : ''}</div>`;
   if (S.view) return '<div class="banner view">👀 View-only link: you can look at everything, nothing can be added or changed</div>';
   return '';
 }
@@ -147,11 +148,12 @@ function stopCamera() { if (S.stream) { for (const t of S.stream.getTracks()) t.
 function render() {
   const r = route();
   killMaps();
-  if (r.name !== 'camera') stopCamera();
+  if (r.name !== 'camera' && r.name !== 'guest') stopCamera();
   if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
   // View-only link: the screens that only add or change things are not reachable. The rules refuse the writes anyway.
   if (S.view && VIEW_BLOCKED.includes(r.name)) { location.replace('#/catflap'); return; }
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor, catwalk: Catwalk };
+  if (r.name === 'guest' && !(S.guest && S.store && S.store.guestOk)) { location.replace('#/catflap'); return; }
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor, catwalk: Catwalk, guest: GuestCam };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
@@ -219,7 +221,11 @@ function Catflap() {
       ${S.store?.viewCode && !DEMO ? `<div class="sharecard" id="sharecard"><div class="label">Share PURRVEILLANCE</div>
         <button class="primary" data-share="house">🔑 Share house link<small>for Canada: can add and change</small></button>
         <button class="primary ghostish" data-share="view">👀 Share view-only link<small>for family: can look, cannot change</small></button>
+        <button class="primary guestish" data-share="guest">🎟️ Share guest link<small>for anyone: can look, and send you a new cat to approve</small></button>
+        <button class="link-amber" id="newguest">Make a new guest link (the old one stops adding)</button>
         <div class="sub" id="sharemsg"></div></div>` : ''}
+      ${S.guest && S.store && S.store.guestOk ? guestCard() : ''}
+      ${S.view ? '' : dropsCard()}
       ${catwalkCard()}
       <div class="furcast" id="furcast"><div class="fk"><span>🔮 FURCAST</span><span class="sub" id="fcwhen">${esc(L.longStamp(now).split(', ')[1])}</span></div><div id="fcbody" class="sub">Working out the odds…</div></div>
     </div></div>${nav('catflap')}`;
@@ -227,7 +233,9 @@ function Catflap() {
   for (const a of $app.querySelectorAll('[data-fresh]')) a.onclick = () => { S.draft = null; };
   const nd = document.getElementById('nudge'); if (nd) nd.onclick = () => { S.filter = 'unnamed'; };
   for (const b of $app.querySelectorAll('[data-share]')) b.onclick = () => shareLink(b.dataset.share);
+  const ng = document.getElementById('newguest'); if (ng) ng.onclick = () => act(async () => { await S.store.guestKey(true); return 'New guest link made · share it again; the old one can still look but cannot add'; });
   wireCatwalkCard();
+  wireDrops();
   const fill = pos => {
     const body = document.getElementById('fcbody'); if (!body) return;
     const fc = L.furcast(S.sums, pos, Date.now());
@@ -784,7 +792,7 @@ function CatEntry(id) {
         ${hasPhoto ? `<span class="sthumb" style="background-color:${swatch(c)}" data-photo="${esc(s.photoId)}"></span>` : ''}
         <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1;text-align:left"><span class="t">${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</span>
         <span class="d">${L.hasPin(s) ? '' : '📍 no place yet · '}${esc(s.note || 'no note')}${s.petted ? ' · petted' : ''}${s.insideOutside === 'inside' ? ' · inside' : ''}${s.livesHere ? ' · 🏠 lives here' : ''}${s.mergedFrom ? ' · merged in' : ''}</span></span>
-        <span class="tag ${esc(s.seenBy)}">${esc(PERSON[s.seenBy] || s.seenBy)}</span><span class="more" aria-hidden="true">⋯</span></button>
+        <span class="tag ${esc(s.seenBy)}">${esc(s.spottedBy ? 'Spotted by ' + s.spottedBy : (PERSON[s.seenBy] || s.seenBy))}</span><span class="more" aria-hidden="true">⋯</span></button>
       ${open ? (S.moving === s.id ? `<div class="acts"><div class="label">Move this sighting to</div>${pickList('moveto')}<button class="ghost" data-cancel>Cancel</button></div>`
         : S.focusing === s.id ? `<div class="acts"><div class="label">Tap the cat in the photo</div><div class="focusbox" id="focusbox"><img id="focusimg" alt="The full photo"><span class="focusdot" id="focusdot" hidden></span></div><div class="sub">Every square crop of this photo will centre on where you tap.</div><button class="ghost" data-cancel>Done</button></div>`
         : S.placingSight === s.id ? `<div class="acts"><div class="wheremap"><div id="smap" style="position:absolute;inset:0"></div><div class="cap">Tap or drag to where it was</div></div><button class="primary" id="saveplace">Save this place</button><button class="ghost" data-cancel>Cancel</button></div>`
@@ -1071,7 +1079,7 @@ function Gallery(catId) {
       ${i > 0 ? `<button class="galnav l" id="galprev" aria-label="Newer photo">${I.back}</button>` : ''}
       ${i < list.length - 1 ? `<button class="galnav r" id="galnext" aria-label="Older photo">${I.next}</button>` : ''}</div>
     <div class="galinfo"><b>${esc(L.dayWord(s.at, now).replace(/^./, x => x.toUpperCase()))}, ${L.hhmm(s.at)}</b>
-      <small>${L.hasPin(s) ? '📍 placed on the map' : '📍 no place yet'}${s.livesHere ? ' · 🏠 lives here' : ''} · seen by ${esc(PERSON[s.seenBy] || s.seenBy)}${isProfile ? ' · ⭐ profile photo' : ''}</small></div>
+      <small>${L.hasPin(s) ? '📍 placed on the map' : '📍 no place yet'}${s.livesHere ? ' · 🏠 lives here' : ''} · ${s.spottedBy ? 'spotted by ' + esc(s.spottedBy) : 'seen by ' + esc(PERSON[s.seenBy] || s.seenBy)}${isProfile ? ' · ⭐ profile photo' : ''}</small></div>
     <div class="galacts">
       ${isProfile ? '' : '<button class="gbtn" id="gprofile">⭐ Use as profile photo</button>'}
       <button class="gbtn" id="gcrop">✂️ Adjust crop</button>
@@ -1393,16 +1401,112 @@ function CatwalkWalk(w) {
   document.getElementById('wend').onclick = () => { saveWalk(null); S.walkPlan = null; go('catflap'); };
 }
 
+// ---------- GUEST LINK (Beth 2026-10-05) ----------
+// A guest sees what the view-only link sees and can add ONE kind of thing: a new cat, with a LIVE camera photo (no
+// gallery), a name, Looks like, and their own name. It lands in Guest drops on the house phones, never on the map or
+// in any count, until Beth accepts it (a cat with a sighting, "Spotted by"), merges it into a cat, or bins it.
+function guestCard() {
+  return `<a class="guestadd" id="guestadd" href="#/guest">${I.camera}<div><b>Spotted a cat?</b><small>Take its photo and send it to Beth</small></div></a>`;
+}
+function GuestCam() {
+  if (!S.guest) return go('catflap');
+  if (S.gdraft) return GuestForm();
+  $app.innerHTML = `<div class="screen dark">
+    <div class="cam-head"><a class="round" href="#/catflap" aria-label="Back to the Catflap">${I.back}</a><div style="font-size:18px;font-weight:700;letter-spacing:0.5px">SPOTTED ONE</div><div style="width:44px"></div></div>
+    <div class="viewfinder"><video id="vid" playsinline muted autoplay></video><div class="frame"></div><div class="hint" id="hint">point it at the cat</div>
+      <div class="chip-dark" style="left:16px" id="where"><span style="width:8px;height:8px;border-radius:4px;background:var(--you);display:inline-block"></span>finding you…</div></div>
+    <div class="cam-foot"><div class="cam-row"><div style="width:56px"></div><button class="shutter" id="shoot" aria-label="Take photo"></button><button class="sq" id="flip" aria-label="Flip camera">${I.flip}</button></div>
+      <div class="sub" style="color:#C9CCD1;text-align:center">A live photo only, so every guest cat is one you saw today.</div>
+      <div class="err" id="camerr" hidden></div></div></div>`;
+  const vid = document.getElementById('vid'), err = document.getElementById('camerr');
+  const showErr = t => { err.textContent = t; err.hidden = false; };
+  getPos().then(pos => { const w = document.getElementById('where'); if (w) w.lastChild.textContent = pos ? 'pinned where you stand' : 'location is off: allow it so Beth knows where'; });
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: S.facing || 'environment', width: { ideal: 1280 } }, audio: false })
+      .then(st => { if (route().name !== 'guest') { st.getTracks().forEach(t => t.stop()); return; } S.stream = st; vid.srcObject = st; })
+      .catch(() => { document.getElementById('hint').textContent = 'camera blocked: allow the camera for this site'; });
+  } else document.getElementById('hint').textContent = 'no camera on this device';
+  document.getElementById('flip').onclick = () => { S.facing = (S.facing || 'environment') === 'environment' ? 'user' : 'environment'; stopCamera(); render(); };
+  document.getElementById('shoot').onclick = async () => {
+    if (!S.stream || !vid.videoWidth) return showErr('The camera is not on. Allow the camera for this site, then try again.');
+    const photo = await makeThumb(vid, vid.videoWidth, vid.videoHeight);
+    const pos = await getPos();
+    stopCamera();
+    S.gdraft = { photo, at: Date.now(), lat: pos?.lat, lng: pos?.lng, name: '', coats: [], longHaired: false, spotter: LS.get('guestname') || '' };
+    render();
+  };
+}
+function GuestForm() {
+  const d = S.gdraft, placed = !!L.cleanPlace(d.lat, d.lng);
+  $app.innerHTML = `${banner()}<div class="screen"><div class="head"><button class="round" id="gback" aria-label="Retake">${I.back}</button><div class="title">NEW CAT</div><div style="width:44px"></div></div>
+    <div class="pad stack" style="padding-bottom:24px">
+      <div class="gprev" style="background-image:url('${d.photo.data}')"></div>
+      <div class="stack8"><label class="label" for="gname">Cat name (leave blank if you don't know)</label><div class="namerow"><input id="gname" class="field" value="${esc(d.name)}" maxlength="60" placeholder="e.g. Mittens">${diceBtn('#gname', d.coats)}</div></div>
+      <div class="stack8"><div class="label">Looks like (tick all that fit)</div><div class="coats">${L.COAT_LIST.map(c => `<button data-gcoat="${c}" class="${d.coats.includes(c) ? 'on' : ''}">${c}</button>`).join('')}<button data-glong class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div></div>
+      <div class="stack8"><label class="label" for="gspot">Your name</label><input id="gspot" class="field" value="${esc(d.spotter)}" maxlength="40" placeholder="so Beth knows who spotted it"></div>
+      <div class="sub">${placed ? '📍 Placed where you took the photo.' : '📍 Location is off. Allow location for this site and retake, so Beth knows where the cat was.'}</div>
+      <div class="err" id="gerr" hidden></div>
+      <button class="primary" id="gsend"${placed ? '' : ' disabled'}>Send to Beth</button></div></div>${nav('catflap')}`;
+  const keep = () => { d.name = document.getElementById('gname').value; d.spotter = document.getElementById('gspot').value; };
+  document.getElementById('gback').onclick = () => { S.gdraft = null; render(); };
+  for (const b of $app.querySelectorAll('[data-gcoat]')) b.onclick = () => { keep(); const c = b.dataset.gcoat; d.coats = d.coats.includes(c) ? d.coats.filter(x => x !== c) : [...d.coats, c]; render(); };
+  const gl = $app.querySelector('[data-glong]'); if (gl) gl.onclick = () => { keep(); d.longHaired = !d.longHaired; render(); };
+  document.getElementById('gsend').onclick = async () => {
+    keep();
+    const er = document.getElementById('gerr'), spotter = d.spotter.trim();
+    if (!spotter) { er.textContent = 'Add your name so Beth knows who spotted it.'; er.hidden = false; return; }
+    LS.set('guestname', spotter);
+    const btn = document.getElementById('gsend'); btn.disabled = true; btn.textContent = 'Sending…';
+    try {
+      await S.store.drop({ name: d.name.trim(), coats: d.coats, longHaired: d.longHaired, spotter, at: d.at, lat: d.lat, lng: d.lng, photo: d.photo.data, w: d.photo.w, h: d.photo.h, status: 'new', createdAt: Date.now() });
+      S.gdraft = null; S.toast = `Sent to Beth to approve. Thanks, ${spotter}!`; go('catflap');
+    } catch (x) { btn.disabled = false; btn.textContent = 'Send to Beth'; er.textContent = 'Not sent: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
+  };
+}
+// House phones: the Guest drops queue on the Catflap.
+function dropsCard() {
+  const list = (S.drops || []).filter(x => x.status === 'new').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  if (!list.length) return '';
+  return `<div class="drops" id="dropscard"><div class="label">🎟️ Guest drops (${list.length})</div>${list.map(x => {
+    const near = S.sums.map(e => { let best = Infinity; for (const s of e.sightings) if (L.hasPin(s)) best = Math.min(best, L.metres(x, s)); const h = L.homeOf(e); if (h) best = Math.min(best, L.metres(x, h)); return { e, best }; }).sort((a, b) => a.best - b.best);
+    const merging = S.dropMerge === x.id;
+    return `<div class="drop"><div class="dthumb" style="background-image:url('${x.photo}')"></div><div class="dtxt"><b>${esc(x.name || 'No name given')}</b>
+      <small>${esc(L.coatText(x.coats || [], x.longHaired) || 'no coat given')} · spotted by ${esc(x.spotter)} · ${esc(L.dayWord(x.at, Date.now()))} ${L.hhmm(x.at)}</small>
+      ${merging ? `<div class="dmerge"><select class="field" id="dmsel">${near.map(({ e, best }) => `<option value="${esc(e.cat.id)}">${esc(L.displayName(e.cat))}${Number.isFinite(best) ? ' · ' + esc(L.distWord(best)) : ''}</option>`).join('')}</select><button class="primary" data-dmergeyes="${esc(x.id)}">Merge</button><button class="ghost" data-dcancel>Cancel</button></div>`
+      : `<div class="dbtns"><button class="primary" data-daccept="${esc(x.id)}">Accept</button><button class="ghost" data-dmerge="${esc(x.id)}">Merge</button><button class="ghost danger" data-dbin="${esc(x.id)}">Bin</button></div>`}</div></div>`;
+  }).join('')}</div>`;
+}
+async function acceptDrop(x, intoId) {
+  const now = Date.now(); let catId = intoId, name;
+  if (!catId) { catId = newId(); const doc = newCatDoc(catId, x.name || '', x.coats || [], x.longHaired); await S.store.put('cats', catId, { ...doc, createdBy: 'guest', spottedBy: x.spotter }); name = L.displayName(doc); }
+  else name = L.displayName(S.byId.get(catId)?.cat);
+  const photoId = newId();
+  await S.store.put('photos', photoId, { data: x.photo, w: x.w, h: x.h, catId, at: x.at, createdAt: now });
+  if (!photoOk(S.byId.get(catId)?.cat.thumbPhotoId)) await S.store.patch('cats', catId, { thumbPhotoId: photoId });
+  await S.store.put('sightings', newId(), { catId, at: x.at, lat: x.lat, lng: x.lng, locationSource: 'phone', seenBy: 'guest', spottedBy: x.spotter, insideOutside: 'outside', petted: false, note: '', photoId, createdAt: now, createdBy: S.me || 'unknown', fromDrop: x.id });
+  await S.store.patch('drops', x.id, { status: intoId ? 'merged' : 'accepted', catId, decidedAt: now, decidedBy: S.me || 'unknown' });
+  return intoId ? `Merged into ${name} · spotted by ${x.spotter}` : `${name} added · spotted by ${x.spotter}`;
+}
+function wireDrops() {
+  const byId = id => (S.drops || []).find(x => x.id === id);
+  for (const b of $app.querySelectorAll('[data-daccept]')) b.onclick = () => act(() => acceptDrop(byId(b.dataset.daccept), null));
+  for (const b of $app.querySelectorAll('[data-dmerge]')) b.onclick = () => { S.dropMerge = b.dataset.dmerge; render(); };
+  for (const b of $app.querySelectorAll('[data-dcancel]')) b.onclick = () => { S.dropMerge = null; render(); };
+  for (const b of $app.querySelectorAll('[data-dmergeyes]')) b.onclick = () => { const into = document.getElementById('dmsel').value; S.dropMerge = null; act(() => acceptDrop(byId(b.dataset.dmergeyes), into)); };
+  for (const b of $app.querySelectorAll('[data-dbin]')) b.onclick = () => act(async () => { await S.store.patch('drops', b.dataset.dbin, { status: 'binned', decidedAt: Date.now(), decidedBy: S.me || 'unknown' }); return 'Binned · it stays in the database, out of the queue'; });
+}
+
 // ---------- share links (2026-10-05) ----------
 // House link: the full code, can change things (Canada). View-only link: the one-way view code (family).
 async function shareLink(kind) {
   const base = location.origin + location.pathname;
-  const url = kind === 'house' ? `${base}?house=${encodeURIComponent(S.house)}` : `${base}?view=${S.store.viewCode}`;
+  const url = kind === 'house' ? `${base}?house=${encodeURIComponent(S.house)}` : kind === 'guest' ? `${base}?guest=${S.store.viewCode}.${await S.store.guestKey()}` : `${base}?view=${S.store.viewCode}`;
   const text = kind === 'house' ? 'Our PURRVEILLANCE house link. Anyone with it can add and change cats, so keep it between us.'
+    : kind === 'guest' ? 'Have a look at our PURRVEILLANCE cat map, and if you spot a new cat, send it in with a photo.'
     : 'Come and see our cats on PURRVEILLANCE. This link is view-only.';
   const msg = document.getElementById('sharemsg');
   if (navigator.share) { try { await navigator.share({ title: 'PURRVEILLANCE', text, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
-  try { await navigator.clipboard.writeText(url); if (msg) msg.textContent = (kind === 'house' ? 'House link' : 'View-only link') + ' copied.'; }
+  try { await navigator.clipboard.writeText(url); if (msg) msg.textContent = ({ house: 'House link', guest: 'Guest link', view: 'View-only link' }[kind]) + ' copied.'; }
   catch { if (msg) msg.innerHTML = `Copy blocked. Press and hold to copy:<div class="box">${esc(url)}</div>`; }
 }
 
@@ -1446,16 +1550,21 @@ function seedDemo(store) {
 async function boot() {
   // A link in the address bar wins over what this phone remembers; a house link wins over a view link.
   // A view link is remembered separately and never overwrites a house code this phone already holds.
-  const urlView = isViewCode(params.get('view')) ? params.get('view') : null;
+  // A guest link is ?guest=<view code>.<guest code>: it reads like a view link and can add guest drops.
+  const gp = (params.get('guest') || '').split('.'), urlGuest = isViewCode(gp[0]) && isGuestCode(gp[1]) ? gp : null;
+  const lsGuest = (LS.get('guest') || '').split('.'), keptGuest = isViewCode(lsGuest[0]) && isGuestCode(lsGuest[1]) ? lsGuest : null;
+  const urlView = urlGuest ? urlGuest[0] : isViewCode(params.get('view')) ? params.get('view') : null;
   let house = params.get('house') || (urlView ? null : LS.get('house')) || (DEMO ? 'demo-house-0000000000' : null);
-  const view = house ? null : (urlView || (isViewCode(LS.get('view')) ? LS.get('view') : null));
+  const guestPair = house ? null : (urlGuest || (urlView ? null : keptGuest));
+  const view = house ? null : (guestPair ? guestPair[0] : (urlView || (isViewCode(LS.get('view')) ? LS.get('view') : null)));
   if (!DEMO && !configured()) return Setup('noconfig');
   if (!house && !view) return Setup('house');
   if (params.get('house')) LS.set('house', house);
-  if (urlView && !house) LS.set('view', urlView);
-  S.house = house; S.view = view;
+  if (urlGuest && !house) LS.set('guest', urlGuest.join('.')); else if (urlView && !house) LS.set('view', urlView);
+  S.house = house; S.view = view; S.guest = guestPair ? guestPair[1] : null;
   const status = t => { if (t) $app.innerHTML = `<div class="setup"><div class="eyebrow">PURRVEILLANCE</div><div class="title">One moment</div><p>${esc(t)}</p><p class="sub">This happens once. Keep the app open.</p></div>`; };
-  try { S.store = await openStore(house, { demo: DEMO, view, onStatus: status }); }
+  try { S.store = await openStore(house, { demo: DEMO, view, guest: S.guest, onStatus: status }); }
+  if (S.store && S.store.watchDrops && !S.view) S.store.watchDrops(list => { S.drops = list; if (route().name === 'catflap') render(); });
   catch (e) { console.error(e); $app.innerHTML = `<div class="setup"><div class="title">Couldn't open the log</div><p>${esc(e.code || e.message || e)}</p><p class="sub">Check signal and reload.</p></div>`; return; }
   if (DEMO && params.has('seed')) seedDemo(S.store);
   let first = true;

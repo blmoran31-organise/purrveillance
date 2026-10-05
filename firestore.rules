@@ -1,14 +1,19 @@
 rules_version = '2';
 // PURRVEILLANCE Firestore rules. Paste into Firebase console > Firestore Database > Rules > Publish.
 //
-// Two kinds of link (2026-10-05, view-only family link):
-//  HOUSE link  ?house=<20-char code>  sees and changes everything (Beth and Canada).
-//  VIEW link   ?view=<64-char code>   sees everything, changes nothing (family).
+// Three kinds of link:
+//  HOUSE link  ?house=<20-char code>   sees and changes everything (Beth and Canada).
+//  VIEW link   ?view=<64-char code>    sees everything, changes nothing (family). 2026-10-05.
+//  GUEST link  ?guest=<view>.<guest>   sees what the view link sees, and can ONLY add a new cat to the Guest drops
+//                                      queue (drops), which a house phone accepts, merges or bins. 2026-10-05.
 // The view code is SHA-256 of the house code, worked out on the phone, so it can never be turned back into
 // the house code. Data lives under houses/{VIEW}/{cats|sightings|photos}/{id}. Anyone signed in who knows
 // the view code can read it. Writing needs a members/{uid} doc, and that doc can only be made by sending the
 // full house code, checked against meta/owner. Neither meta/owner nor members can be read by anyone, so a
 // view link never reveals the house code.
+// The guest code is random, kept in meta/guestkey, which only a house phone can read or change (a change makes
+// every old guest link stop adding). A guest phone joins with guests/{uid}, checked against meta/guestkey.
+// Drops can be read and decided only by a house phone. A guest can never write cats, sightings or photos.
 // LEGACY: data written before 2026-10-05 sits under houses/{HOUSE}. It stays readable and writable until the
 // app copies it to the view path and writes meta/moved, after which it is frozen. Nothing can be deleted.
 service cloud.firestore {
@@ -18,9 +23,23 @@ service cloud.firestore {
     function legacy(house) { return house.size() >= 20 && house.size() < 64; }
     function isMember(house) { return exists(/databases/$(database)/documents/houses/$(house)/members/$(request.auth.uid)); }
     function moved(house) { return exists(/databases/$(database)/documents/houses/$(house)/meta/moved); }
+    function guestKey(house) { return get(/databases/$(database)/documents/houses/$(house)/meta/guestkey).data.key; }
+    function isGuest(house) {
+      return exists(/databases/$(database)/documents/houses/$(house)/guests/$(request.auth.uid))
+        && get(/databases/$(database)/documents/houses/$(house)/guests/$(request.auth.uid)).data.key == guestKey(house);
+    }
     function okData(coll) {
       return coll in ['cats', 'sightings', 'photos']
         && (coll != 'photos' || request.resource.data.data.size() < 400000);
+    }
+    function okDrop() {
+      return request.resource.data.keys().hasOnly(['name', 'coats', 'longHaired', 'spotter', 'at', 'lat', 'lng', 'photo', 'w', 'h', 'status', 'createdAt'])
+        && request.resource.data.keys().hasAll(['spotter', 'photo', 'status', 'lat', 'lng', 'at'])
+        && request.resource.data.status == 'new'
+        && request.resource.data.photo is string && request.resource.data.photo.size() < 400000
+        && request.resource.data.spotter is string && request.resource.data.spotter.size() > 0 && request.resource.data.spotter.size() <= 40
+        && (!('name' in request.resource.data) || (request.resource.data.name is string && request.resource.data.name.size() <= 60))
+        && request.resource.data.lat is number && request.resource.data.lng is number;
     }
 
     match /houses/{house}/{coll}/{id} {
@@ -39,12 +58,29 @@ service cloud.firestore {
         && request.resource.data.key is string && legacy(request.resource.data.key);
       // moved: freezes the legacy path once its data has been copied.
       allow create: if signedIn() && legacy(house) && name == 'moved';
+      // guestkey: the guest code. Only a house phone can read it (to share the guest link) or change it.
+      allow get: if signedIn() && shared(house) && name == 'guestkey' && isMember(house);
+      allow create, update: if signedIn() && shared(house) && name == 'guestkey' && isMember(house)
+        && request.resource.data.keys().hasOnly(['key', 'at'])
+        && request.resource.data.key is string && request.resource.data.key.size() >= 20;
     }
 
     match /houses/{house}/members/{uid} {
       allow create, update: if signedIn() && shared(house) && uid == request.auth.uid
         && request.resource.data.keys().hasOnly(['key', 'at'])
         && request.resource.data.key == get(/databases/$(database)/documents/houses/$(house)/meta/owner).data.key;
+    }
+
+    match /houses/{house}/guests/{uid} {
+      allow create, update: if signedIn() && shared(house) && uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['key', 'at'])
+        && request.resource.data.key == guestKey(house);
+    }
+
+    match /houses/{house}/drops/{id} {
+      allow get, list: if signedIn() && shared(house) && isMember(house);
+      allow update: if signedIn() && shared(house) && isMember(house);
+      allow create: if signedIn() && shared(house) && (isMember(house) || isGuest(house)) && okDrop();
     }
   }
 }

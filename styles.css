@@ -367,3 +367,29 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .lphint { position: absolute; left: 12px; top: 12px; max-width: calc(100% - 96px); z-index: 550; background: rgba(23,24,28,0.78); color: #FFFFFF; font-size: 12px; padding: 5px 10px; border-radius: 10px; pointer-events: none; }
 .homeline small { display: block; font-weight: 400; color: var(--caption); margin-top: 2px; }
 .homeline .ghost { margin-top: 8px; }
+
+/* Catwalk (2026-10-05) */
+.catwalk { background: var(--surface); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 10px; color: var(--ink); }
+.catwalk .fk { display: flex; justify-content: space-between; font-size: 12px; font-weight: 700; letter-spacing: 0.6px; color: var(--moss); }
+.catwalk input[type=range] { width: 100%; accent-color: var(--moss); height: 28px; }
+.catwalk b { font-size: 16px; }
+.wtiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.wtiles > div { background: var(--surface); border-radius: 14px; padding: 10px; display: flex; flex-direction: column; }
+.wtiles b { font-size: 24px; }
+.wtiles small { color: var(--caption); font-size: 12px; }
+.wnote { margin-top: 8px; background: #FCEFD9; color: #7A4E0F; border-radius: 12px; padding: 8px 10px; font-size: 13px; }
+.wbtns { display: grid; grid-template-columns: 1fr 2fr; gap: 8px; padding-bottom: 12px; }
+.wbtns .primary, .wbtns .ghost { height: 52px; }
+.wstop i { width: 30px; height: 30px; border-radius: 15px; border: 3px solid #FFFFFF; box-shadow: 0 2px 6px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-weight: 700; font-style: normal; font-size: 14px; transform: translate(-50%, -50%); }
+.wstop.cur i { width: 38px; height: 38px; border-radius: 19px; box-shadow: 0 0 0 4px rgba(233,162,59,0.6), 0 2px 6px rgba(0,0,0,0.3); }
+.wstop .pin.house2 { transform: translate(-50%, -60%); }
+.wstop.turn { transform: translate(-50%, -50%); width: 24px; height: 24px; border-radius: 12px; background: #FFFFFF; color: var(--moss); font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+.wprog { height: 8px; border-radius: 4px; background: var(--seg); overflow: hidden; }
+.wprog div { height: 100%; background: var(--moss); }
+.wcat { display: flex; align-items: center; gap: 12px; background: var(--surface); border-radius: 16px; padding: 10px; }
+.wcat .thumb { width: 48px; height: 48px; border-radius: 12px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-weight: 700; background-size: cover; background-position: center; }
+.wcat .wtxt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wcat .wtxt small { color: var(--caption); font-size: 12px; }
+.wcat .wact { display: flex; flex-direction: column; gap: 6px; }
+.wcat .wact button { height: 38px; padding: 0 12px; font-size: 14px; width: auto; }
+.wdone { font-size: 13px; font-weight: 600; color: var(--moss); }

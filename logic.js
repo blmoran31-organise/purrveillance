@@ -385,3 +385,97 @@ export function spread(points, pad = 4) {
   }
   return P.map((p, i) => movable(i) ? { x: p.x, y: p.y, moved: true } : { x: points[i].x, y: points[i].y, moved: false });
 }
+
+// ---------- CATWALK (Beth 2026-10-05): a loop from here back to here, in the time she picks, past as many DIFFERENT
+// cats as the time allows. Scores are Furcast's: a sighting near this time of day counts more, a home counts most,
+// and a "Not here" from an earlier walk (cat.misses) near this spot and time counts against.
+// Planning runs on a table of walking minutes between points (point 0 is the start). With the walking router the
+// table is real path times; without it, straight lines times DETOUR. Turn points (no cat) on rings round the start
+// let a loop fill the time when the cats alone would make it short.
+export const WALK = { mPerMin: 75, dwellMin: 1, detour: 1.3, spotM: 40, shareM: 30 };
+export function walkCandidates(summaries, now) {
+  const nowMin = minuteOfDay(now), out = [];
+  for (const e of summaries) {
+    const home = homeOf(e), pts = e.sightings.filter(hasPin).map(s => ({ lat: s.lat, lng: s.lng }));
+    if (home) pts.push({ lat: home.lat, lng: home.lng, home: true });
+    let best = null;
+    for (const p of pts) {
+      const near = e.sightings.filter(s => hasPin(s) && metres(p, s) <= WALK.spotM);
+      const timely = near.filter(s => circMin(minuteOfDay(s.at), nowMin) <= 90).length;
+      const atHome = !!(home && metres(p, home) <= WALK.spotM);
+      const missed = (e.cat.misses || []).filter(m => cleanPlace(m.lat, m.lng) && metres(p, m) <= WALK.spotM && circMin(minuteOfDay(m.at), nowMin) <= 90).length;
+      const score = near.length + timely * 2 + (atHome ? 6 : 0) - missed * 2;
+      if (score > 0 && (!best || score > best.score)) {
+        const mins = near.map(s => minuteOfDay(s.at)).sort((a, b) => a - b);
+        best = { cat: e.cat, lat: p.lat, lng: p.lng, score, home: atHome, seen: near.length, usual: mins.length ? [mins[0], mins[mins.length - 1]] : null };
+      }
+    }
+    if (best) out.push(best);
+  }
+  return out;
+}
+// Turn points: rings round the start, `dirs` directions each. Straight-line planning gets a fine set; the router a small one.
+export function ringPoints(origin, radii, dirs) {
+  const out = [], k = 111320, kl = 111320 * Math.cos(origin.lat * Math.PI / 180);
+  for (const r of radii) for (let i = 0; i < dirs; i++) { const a = (i / dirs) * 2 * Math.PI + r / 997; out.push({ lat: origin.lat + (r * Math.cos(a)) / k, lng: origin.lng + (r * Math.sin(a)) / kl, turn: true }); }
+  return out;
+}
+// Points for the table: start, then the strongest candidates that could be reached at all, then turn points.
+export function walkPoints(summaries, origin, minutes, now, { maxCats = 34, radii, dirs } = {}) {
+  const reach = (minutes * WALK.mPerMin) / 2;
+  const cands = walkCandidates(summaries, now).filter(c => metres(origin, c) <= reach).sort((a, b) => b.score - a.score).slice(0, maxCats);
+  const turns = ringPoints(origin, (radii || [100, 200, 300, 400, 550, 700, 850, 1000, 1200, 1400, 1700, 2000, 2400, 2800]).filter(r => r <= reach), dirs || 12);
+  return { points: [{ lat: origin.lat, lng: origin.lng }, ...cands, ...turns], nCands: cands.length };
+}
+export const straightTable = points => points.map(a => points.map(b => (metres(a, b) * WALK.detour) / WALK.mPerMin));
+// Loop time for an order of point indices (start excluded): legs from the table plus a minute at each cat stop.
+export function loopMinutes(table, order, points) {
+  const seq = [0, ...order, 0];
+  let t = 0; for (let i = 1; i < seq.length; i++) t += table[seq[i - 1]][seq[i]];
+  return t + order.filter(i => !points[i].turn).length * WALK.dwellMin;
+}
+// rng: a function returning 0..1; jitter 0 gives the best plan, a reroll passes a fresh rng and jitter > 0.
+export function planOnTable(points, nCands, table, minutes, { rng = Math.random, jitter = 0 } = {}) {
+  const w = points.map((p, i) => i >= 1 && i <= nCands ? p.score * (1 + jitter * (rng() - 0.5)) : 0);
+  const order = [], used = new Set(), extra = new Map();   // extra: stop index -> other candidates sharing it
+  for (;;) {
+    let pick = null; const base = loopMinutes(table, order, points);
+    for (let c = 1; c <= nCands; c++) {
+      if (used.has(points[c].cat.id)) continue;
+      const shared = order.find(i => metres(points[i], points[c]) <= WALK.shareM);
+      if (shared !== undefined) { pick = { c, shared, ratio: Infinity }; break; }   // another cat at a stop already on the loop is free
+      for (let k = 0; k <= order.length; k++) {
+        const t = loopMinutes(table, [...order.slice(0, k), c, ...order.slice(k)], points);
+        if (t > minutes * 1.05) continue;
+        const ratio = w[c] / (t - base + 0.5);
+        if (!pick || ratio > pick.ratio) pick = { c, k, ratio };
+      }
+    }
+    if (!pick) break;
+    used.add(points[pick.c].cat.id);
+    if (pick.shared !== undefined) extra.set(pick.shared, [...(extra.get(pick.shared) || []), pick.c]);
+    else order.splice(pick.k, 0, pick.c);
+  }
+  // Fill the time: up to two turn points, each placed where it brings the loop closest to the slider.
+  for (let round = 0; round < 2 && loopMinutes(table, order, points) < minutes * 0.95; round++) {
+    let best = null;
+    for (let t = nCands + 1; t < points.length; t++) for (let k = 0; k <= order.length; k++) {
+      const trial = [...order.slice(0, k), t, ...order.slice(k)], m = loopMinutes(table, trial, points);
+      if (m > minutes * 1.1) continue;
+      // A reroll picks at random among turns that land within 10 per cent, so the loop itself changes.
+      const fit = Math.abs(m - minutes) <= minutes * 0.1, r = jitter ? rng() : 0;
+      if (!best || (jitter && fit && (!best.fit || r > best.r)) || (!(jitter && best.fit) && Math.abs(m - minutes) < Math.abs(best.m - minutes))) best = { trial, m, fit, r };
+    }
+    if (!best || best.m <= loopMinutes(table, order, points)) break;
+    order.splice(0, order.length, ...best.trial);
+  }
+  const stops = order.map(i => points[i].turn ? { lat: points[i].lat, lng: points[i].lng, turn: true, cats: [], idx: i }
+    : { lat: points[i].lat, lng: points[i].lng, home: points[i].home, cats: [points[i], ...(extra.get(i) || []).map(j => points[j])].map(c => ({ ...c, w: w[points.indexOf(c)] })), idx: i });
+  return { stops, minutes: loopMinutes(table, order, points), order };
+}
+// Straight-line plan, used without the router and by the tests.
+export function planWalk(summaries, origin, minutes, now, opts = {}) {
+  const { points, nCands } = walkPoints(summaries, origin, minutes, now);
+  return planOnTable(points, nCands, straightTable(points), minutes, opts);
+}
+export const minHHMM = m => String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');

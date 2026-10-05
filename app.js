@@ -16,6 +16,7 @@ const LS = {
 const S = {
   store: null, house: null, me: LS.get('me'), data: { cats: [], sightings: [] }, sums: [], byId: new Map(),
   pos: null, posAt: 0, maps: [], stream: null, draft: null, filter: 'all', period: LS.get('period') || 'week',
+  noRouter: params.has('norouter'),
   renaming: null, error: null, toast: null, showAllChips: false, mapMode: LS.get('mapmode') || 'all',
 };
 
@@ -150,7 +151,7 @@ function render() {
   if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
   // View-only link: the screens that only add or change things are not reachable. The rules refuse the writes anyway.
   if (S.view && VIEW_BLOCKED.includes(r.name)) { location.replace('#/catflap'); return; }
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor };
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor, catwalk: Catwalk };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
@@ -163,10 +164,10 @@ function render() {
 }
 
 // Everything that adds, edits or deletes, removed from the page on a view-only link (2026-10-05).
-const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted'];
+const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted', 'catwalk'];
 const VIEW_HIDE = ['.logs', '.who', '.hint', '#nudge', '.camfab', '#nophoto', '.binlink', '#pencil', '#fav', '#editdetails', '#delcat', '#delcatyes', '#merge', '#addphoto',
   '#gprofile', '#glives', '#gcrop', '#ganother', '#gwrong', '.srow2 .acts', '[data-delsight]', '[data-delphoto]', '[data-crop]', '[data-lives]', '[data-wrong]', '[data-another]', '[data-moveto]',
-  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet'].join(',');
+  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet', '#catwalkcard'].join(',');
 
 // ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
 // Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
@@ -219,12 +220,14 @@ function Catflap() {
         <button class="primary" data-share="house">🔑 Share house link<small>for Canada: can add and change</small></button>
         <button class="primary ghostish" data-share="view">👀 Share view-only link<small>for family: can look, cannot change</small></button>
         <div class="sub" id="sharemsg"></div></div>` : ''}
+      ${catwalkCard()}
       <div class="furcast" id="furcast"><div class="fk"><span>🔮 FURCAST</span><span class="sub" id="fcwhen">${esc(L.longStamp(now).split(', ')[1])}</span></div><div id="fcbody" class="sub">Working out the odds…</div></div>
     </div></div>${nav('catflap')}`;
   for (const b of $app.querySelectorAll('[data-me]')) b.onclick = () => { S.me = b.dataset.me; LS.set('me', S.me); render(); };
   for (const a of $app.querySelectorAll('[data-fresh]')) a.onclick = () => { S.draft = null; };
   const nd = document.getElementById('nudge'); if (nd) nd.onclick = () => { S.filter = 'unnamed'; };
   for (const b of $app.querySelectorAll('[data-share]')) b.onclick = () => shareLink(b.dataset.share);
+  wireCatwalkCard();
   const fill = pos => {
     const body = document.getElementById('fcbody'); if (!body) return;
     const fc = L.furcast(S.sums, pos, Date.now());
@@ -512,7 +515,7 @@ function Repurrt() {
         const savedName = S.byId.get(catId) ? L.displayName(S.byId.get(catId).cat) : (d.name.trim() || 'the new cat');
         S.toast = `Saved ${savedName} · now pick the next cat in the same photo`;
         render();
-      } else { S.draft = null; go('cat/' + catId); }
+      } else { const back = d.fromWalk; S.draft = null; go(back ? 'catwalk' : 'cat/' + catId); }
     }
     catch (x) { console.error(x); S.toast = null; btn.disabled = false; btn.textContent = another ? '📸 Save, then + Another cat in this photo' : saveLabel; er.textContent = 'Not saved: ' + (x.code || x.message || x) + '. Check signal and try again.'; er.hidden = false; }
   };
@@ -1223,6 +1226,171 @@ function Meowmentum() {
       <div class="strip"><div class="l">Purrometer</div><div class="r"><span><b>Beth</b> ${st.purr.beth} pet${st.purr.beth === 1 ? '' : 's'}</span><span><b>Canada</b> ${st.purr.canada} pet${st.purr.canada === 1 ? '' : 's'}</span></div></div>
     </div></div>${nav('stats')}`;
   for (const b of $app.querySelectorAll('[data-p]')) b.onclick = () => { S.period = b.dataset.p; LS.set('period', S.period); render(); };
+}
+
+// ---------- CATWALK (Beth 2026-10-05) ----------
+// Catflap card: a slider of 10 to 90 minutes, then a loop from here back to here past as many different cats as fit.
+// Plan screen: route, numbered stops, ~cats / min / km, best odds, Start walk and Reroll. Walk screen: stop n of N,
+// Spotted (opens Repurrt for that cat, then returns here) and Not here (a miss that lowers its odds at this spot and
+// time). The walk is kept on this phone, so a reload or a trip to Repurrt picks it back up.
+const ROUTER = 'https://routing.openstreetmap.de/routed-foot/route/v1/foot/';
+const loadWalk = () => { try { return JSON.parse(LS.get('walk') || 'null'); } catch { return null; } };
+const saveWalk = w => LS.set('walk', w ? JSON.stringify(w) : '');
+function catwalkCard() {
+  const w = loadWalk();
+  if (w && w.started) {
+    const n = w.stops.filter(x => x.cats.length).length, i = Math.min(w.i, n);
+    return `<a class="catwalk" id="catwalkcard" href="#/catwalk"><div class="fk"><span>🚶 CATWALK</span><span class="sub">stop ${Math.min(i + 1, n)} of ${n}</span></div><b>Walk in progress · carry on</b></a>`;
+  }
+  const mins = Number(LS.get('walkmins')) || 30;
+  return `<div class="catwalk" id="catwalkcard"><div class="fk"><span>🚶 CATWALK</span><span class="sub" id="cwmins">${mins} min</span></div>
+    <input type="range" id="cwslider" min="10" max="90" step="5" value="${mins}" aria-label="How long a walk, in minutes">
+    <button class="primary" id="cwplan">Plan my catwalk</button></div>`;
+}
+function wireCatwalkCard() {
+  const sl = document.getElementById('cwslider'); if (!sl) return;
+  sl.oninput = () => { document.getElementById('cwmins').textContent = sl.value + ' min'; LS.set('walkmins', sl.value); };
+  document.getElementById('cwplan').onclick = () => { S.walkPlan = null; LS.set('walkmins', sl.value); go('catwalk'); };
+}
+// The walking router gets only the coordinates of the loop. Any failure returns null and the plan uses straight lines.
+async function routeWalk(origin, stops) {
+  if (S.noRouter) return null;   // test switch: ?norouter=1 shows the straight-line fallback
+  const pts = [origin, ...stops, origin].map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 9000);
+    const r = await fetch(`${ROUTER}${pts}?overview=full&geometries=geojson`, { signal: ctl.signal }); clearTimeout(t);
+    const j = await r.json(); const rt = j.routes && j.routes[0]; if (!rt) return null;
+    return { coords: rt.geometry.coordinates.map(([lng, lat]) => [lat, lng]), metres: rt.distance, minutes: rt.duration / 60 + stops.filter(x => x.cats.length).length * L.WALK.dwellMin };
+  } catch { return null; }
+}
+// Real walking minutes between every pair of points, from the router's table service (one call, coordinates only).
+async function walkTable(points) {
+  if (S.noRouter) return null;
+  try {
+    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 12000);
+    const pts = points.map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(';');
+    const j = await (await fetch(`${ROUTER.replace('/route/', '/table/')}${pts}?annotations=duration`, { signal: ctl.signal })).json(); clearTimeout(t);
+    if (j.code !== 'Ok' || !j.durations) return null;
+    // A point the router could not reach gets a huge time, so it is never chosen.
+    return { table: j.durations.map(r => r.map(x => x === null ? 1e6 : x / 60)), snapped: (j.destinations || []).map(d => d.location) };
+  } catch { return null; }
+}
+async function buildWalk(minutes, prevKey) {
+  const origin = await getPos(30000); if (!origin) return { error: 'location' };
+  let seed = (Date.now() % 2147483646) + 1; const rng = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const key = p => p.stops.flatMap(x => x.cats.map(c => c.cat.id)).sort().join(',') + '|' + p.stops.map(x => x.idx).join(',');
+  const now = Date.now();
+  // With the router: a small set of turn points (the table is one request of at most ~70 points).
+  let { points, nCands } = L.walkPoints(S.sums, origin, minutes, now, { radii: [200, 400, 700, 1000, 1500, 2200], dirs: 6 });
+  const tb = await walkTable(points);
+  let table;
+  if (tb) {
+    table = tb.table;
+    points = points.map((p, i) => p.turn && tb.snapped[i] ? { ...p, lat: tb.snapped[i][1], lng: tb.snapped[i][0] } : p);   // turn on the path, not in a field
+  } else { ({ points, nCands } = L.walkPoints(S.sums, origin, minutes, now)); table = L.straightTable(points); }
+  let plan = L.planOnTable(points, nCands, table, minutes, prevKey ? { rng, jitter: 1.6 } : {});
+  // Reroll must change the stops: a few fresh draws before settling for the same set.
+  for (let k = 0; prevKey && k < 8 && key(plan) === prevKey; k++) plan = L.planOnTable(points, nCands, table, minutes, { rng, jitter: 1.6 });
+  let sameCats = false;
+  if (prevKey && key(plan) === prevKey) { plan = { ...plan, stops: plan.stops.slice().reverse() }; sameCats = true; }   // same stops: walk it the other way round
+  else if (prevKey && key(plan).split('|')[0] === prevKey.split('|')[0]) sameCats = true;
+  const r = tb ? await routeWalk(origin, plan.stops) : null;
+  const catStops = plan.stops.filter(x => x.cats.length).length;
+  return { origin, minutes, stops: plan.stops, key: key(plan), routed: !!r, sameCats,
+    coords: r ? r.coords : [origin, ...plan.stops, origin].map(p => [p.lat, p.lng]),
+    km: r ? r.metres / 1000 : ((plan.minutes - catStops * L.WALK.dwellMin) * L.WALK.mPerMin) / (1000 * L.WALK.detour),
+    estMinutes: r ? r.minutes : plan.minutes };
+}
+function stopIcon(stop, n, current) {
+  if (stop.turn) return '<div class="wstop turn">↩</div>';
+  if (stop.cats.length > 1) return `<div class="wstop ${current ? 'cur' : ''}">${houseHtml(n, false)}</div>`;
+  const c = S.byId.get(stop.cats[0].id || stop.cats[0].cat.id)?.cat || {};
+  return `<div class="wstop ${current ? 'cur' : ''}"><i style="background-color:${swatch(c)}">${n}</i></div>`;
+}
+function drawWalkMap(el, coords, stops, curIdx) {
+  const m = guardMap(el, 'catwalk map', () => makeMap(el)); if (!m) return null;
+  guardMap(el, 'catwalk route', () => {
+    const line = window.L.polyline(coords, { color: '#2F6B4F', weight: 5, opacity: 0.85 }).addTo(m);
+    let n = 0;
+    for (const st of stops) {
+      const num = st.cats.length ? ++n : 0, cur = !!num && n - 1 === curIdx;
+      window.L.marker([st.lat, st.lng], { icon: divIcon(stopIcon(st, num, cur)), interactive: false, zIndexOffset: cur ? 1000 : 0 }).addTo(m);
+    }
+    window.L.circleMarker(coords[0], { radius: 7, color: '#FFFFFF', weight: 3, fillColor: '#3A7BD5', fillOpacity: 1 }).addTo(m);
+    m.fitBounds(line.getBounds(), { padding: [28, 28], maxZoom: 18 });
+  });
+  return m;
+}
+const usualText = u => u ? `Usually here ${L.minHHMM(u[0])}${u[1] !== u[0] ? ' to ' + L.minHHMM(u[1]) : ''}` : 'No usual time yet';
+const walkHead = () => `<div class="head"><a class="round" href="#/catflap" aria-label="Back to the Catflap">${I.back}</a><div class="title">CATWALK</div><div style="width:44px"></div></div>`;
+function Catwalk() {
+  const w = loadWalk();
+  if (w && w.started) return CatwalkWalk(w);
+  const minutes = Number(LS.get('walkmins')) || 30;
+  const p = S.walkPlan;
+  if (!p || p.minutes !== minutes || p.pending) {
+    $app.innerHTML = `${banner()}<div class="screen">${walkHead()}<div class="pad"><div class="sub">Planning a ${minutes} minute loop from where you are…</div></div></div>${nav('catflap')}`;
+    if (p && p.pending) return;
+    const prevKey = S.walkRerollFrom || null; S.walkRerollFrom = null;
+    S.walkPlan = { minutes, pending: true };
+    buildWalk(minutes, prevKey).then(r => { S.walkPlan = r.error ? { minutes, error: r.error } : r; if (route().name === 'catwalk') render(); });
+    return;
+  }
+  if (p.error) {
+    $app.innerHTML = `${banner()}<div class="screen">${walkHead()}<div class="pad stack"><p>A catwalk starts from where you are, so it needs your location. Allow location for this site, then try again.</p><button class="primary" id="cwretry">Try again</button></div></div>${nav('catflap')}`;
+    document.getElementById('cwretry').onclick = () => { S.walkPlan = null; render(); };
+    return;
+  }
+  const cats = p.stops.flatMap(x => x.cats), best = cats.slice().sort((a, b) => b.score - a.score)[0];
+  $app.innerHTML = `${banner()}<div class="screen" style="overflow:hidden">${walkHead()}
+    <div class="pad"><div class="wtiles"><div><b>~${cats.length}</b><small>cat${cats.length === 1 ? '' : 's'}</small></div><div><b>${Math.round(p.estMinutes)}</b><small>min</small></div><div><b>${p.km.toFixed(1)}</b><small>km</small></div></div>
+      ${best ? `<div class="sub" style="margin-top:8px">Best odds now: <b>${esc(L.displayName(S.byId.get(best.cat.id)?.cat || best.cat))}</b>, ${esc(usualText(best.usual).replace(/^U/, 'u'))}</div>` : '<div class="sub" style="margin-top:8px">No cats logged near enough for this walk yet. It is still a walk.</div>'}
+      ${p.sameCats ? '<div class="sub" style="margin-top:6px">Same cats as the last plan, so Reroll changed the route.</div>' : ''}
+      ${p.routed ? '' : '<div class="wnote">The walking route service did not answer, so this is drawn as straight lines and the time is a guess.</div>'}</div>
+    <div class="mapwrap"><div id="wmap2" style="position:absolute;inset:0"></div></div>
+    <div class="pad wbtns"><button class="ghost" id="cwreroll">🎲 Reroll</button><button class="primary" id="cwstart">Start walk</button></div></div>${nav('catflap')}`;
+  drawWalkMap(document.getElementById('wmap2'), p.coords, p.stops, -1);
+  document.getElementById('cwreroll').onclick = () => { S.walkRerollFrom = p.key; S.walkPlan = null; render(); };
+  document.getElementById('cwstart').onclick = () => {
+    saveWalk({ started: Date.now(), minutes, routed: p.routed, coords: p.coords, i: 0,
+      stops: p.stops.map(x => ({ lat: x.lat, lng: x.lng, turn: !!x.turn, home: !!x.home, cats: x.cats.map(c => ({ id: c.cat.id, seen: c.seen, usual: c.usual })), done: {} })) });
+    render();
+  };
+}
+function CatwalkWalk(w) {
+  const real = w.stops.filter(x => x.cats.length), n = real.length, i = Math.min(w.i, n);
+  const left = Math.max(0, Math.round(w.minutes - (Date.now() - w.started) / 60000));
+  const st = real[i];
+  const prog = `<div class="wprog"><div style="width:${n ? Math.round(i / n * 100) : 100}%"></div></div><div class="sub">${i} of ${n} stops done · ${left} min left</div>`;
+  if (!st) {
+    const spotted = real.reduce((a, x) => a + Object.values(x.done).filter(v => v === 'spotted').length, 0), all = real.reduce((a, x) => a + x.cats.length, 0);
+    $app.innerHTML = `${banner()}<div class="screen">${walkHead()}<div class="pad stack"><div class="title" style="font-size:28px">Catwalk done</div><div class="sub">Spotted ${spotted} of ${all} cat${all === 1 ? '' : 's'}. Every Not here makes the next plan smarter.</div>${prog}<button class="primary" id="cwend">Finish</button></div></div>${nav('catflap')}`;
+    document.getElementById('cwend').onclick = () => { saveWalk(null); S.walkPlan = null; go('catflap'); };
+    return;
+  }
+  $app.innerHTML = `${banner()}<div class="screen" style="overflow:hidden">${walkHead()}
+    <div class="pad stack8"><div class="label">Stop ${i + 1} of ${n}${st.home ? ' · 🏠 a home' : ''}</div><div class="sub" id="wdist">Finding you…</div>${prog}</div>
+    <div class="mapwrap" style="min-height:220px"><div id="wmap3" style="position:absolute;inset:0"></div></div>
+    <div class="pad stack8">${st.cats.map(c => {
+      const cat = S.byId.get(c.id)?.cat, done = st.done[c.id];
+      return `<div class="wcat"><div class="thumb" style="background-color:${swatch(cat || {})}"${cat ? photoAttr(cat) : ''}><span class="ini">${esc(L.initial(cat || {}))}</span></div>
+        <div class="wtxt"><b>${esc(cat ? L.displayName(cat) : 'A cat')}</b><small>${esc(usualText(c.usual))} · seen ${c.seen} time${c.seen === 1 ? '' : 's'}</small></div>
+        ${done ? `<span class="wdone">${done === 'spotted' ? '✓ Spotted' : 'Not here'}</span>` : `<div class="wact"><button class="primary" data-wspot="${esc(c.id)}">Spotted</button><button class="ghost" data-wmiss="${esc(c.id)}">Not here</button></div>`}</div>`;
+    }).join('')}
+      <button class="link-amber" id="wend" style="margin-top:6px">End this walk</button></div></div>${nav('catflap')}`;
+  drawWalkMap(document.getElementById('wmap3'), w.coords, w.stops, i);
+  getPos().then(pos => { const el = document.getElementById('wdist'); if (el) el.textContent = pos ? `${L.distWord(L.metres(pos, st))} to go` : 'Location is off, so distance is hidden.'; });
+  const next = () => { if (st.cats.every(c => st.done[c.id])) w.i = i + 1; saveWalk(w); };
+  for (const b of $app.querySelectorAll('[data-wspot]')) b.onclick = () => {
+    const id = b.dataset.wspot; st.done[id] = 'spotted'; next();
+    getPos().then(pos => { S.draft = newDraft({ catId: id, lat: pos ? pos.lat : st.lat, lng: pos ? pos.lng : st.lng, source: pos ? 'phone' : 'manual', fromWalk: true }); go('repurrt'); });
+  };
+  for (const b of $app.querySelectorAll('[data-wmiss]')) b.onclick = () => act(async () => {
+    const id = b.dataset.wmiss, cat = S.byId.get(id)?.cat;
+    await S.store.patch('cats', id, { misses: [...(cat?.misses || []), { lat: st.lat, lng: st.lng, at: Date.now(), by: S.me || 'unknown' }] });
+    st.done[id] = 'miss'; next(); return `Noted: ${cat ? L.displayName(cat) : 'that cat'} not here this time`;
+  });
+  document.getElementById('wend').onclick = () => { saveWalk(null); S.walkPlan = null; go('catflap'); };
 }
 
 // ---------- share links (2026-10-05) ----------

@@ -2,7 +2,7 @@
 // Screens follow docs/mockups: Catflap, Meow Map, Pawparazzi, Repurrt, The Catalogue, Catalogue entry, Meowmentum.
 
 import * as L from './logic.js';
-import { openStore, configured, newId, newHouseCode } from './store.js';
+import { openStore, configured, newId, newHouseCode, isViewCode } from './store.js';
 import { randomName } from './names.js';
 
 const $app = document.getElementById('app');
@@ -49,6 +49,7 @@ function nav(on) {
 function banner() {
   if (S.error) return `<div class="banner">Can't reach the shared log (${esc(S.error)}). Check signal; nothing new will save until it's back.</div>`;
   if (DEMO) return '<div class="banner">DEMO: sample cats on this phone only, not shared</div>';
+  if (S.view) return '<div class="banner view">👀 View-only link: you can look at everything, nothing can be added or changed</div>';
   return '';
 }
 
@@ -147,16 +148,25 @@ function render() {
   killMaps();
   if (r.name !== 'camera') stopCamera();
   if (r.name !== 'cat') { S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
+  // View-only link: the screens that only add or change things are not reachable. The rules refuse the writes anyway.
+  if (S.view && VIEW_BLOCKED.includes(r.name)) { location.replace('#/catflap'); return; }
   const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
   finally {
     if (S.toast) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = S.toast; $app.appendChild(t); const msg = S.toast; setTimeout(() => { if (S.toast === msg) { S.toast = null; t.remove(); } }, 4000); }
+    if (S.view) for (const n of $app.querySelectorAll(VIEW_HIDE)) n.remove();
     hydratePhotos();
     wireDice();
   }
 }
+
+// Everything that adds, edits or deletes, removed from the page on a view-only link (2026-10-05).
+const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted'];
+const VIEW_HIDE = ['.logs', '.who', '.hint', '#nudge', '.camfab', '#nophoto', '.binlink', '#pencil', '#fav', '#editdetails', '#delcat', '#delcatyes', '#merge', '#addphoto',
+  '#gprofile', '#glives', '#gcrop', '#ganother', '#gwrong', '.srow2 .acts', '[data-delsight]', '[data-delphoto]', '[data-crop]', '[data-lives]', '[data-wrong]', '[data-another]', '[data-moveto]',
+  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard'].join(',');
 
 // ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
 // Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
@@ -205,11 +215,16 @@ function Catflap() {
       ${flash}
       ${strip}
       ${numbered ? `<a class="nudge" href="#/catalogue" id="nudge">🐈‍⬛ ${numbered === 1 ? '1 cat is' : numbered + ' cats are'} still ${numbered === 1 ? 'a number' : 'numbers'}. Name ${numbered === 1 ? 'it' : 'them'} ${I.next}</a>` : ''}
+      ${S.store?.viewCode && !DEMO ? `<div class="sharecard" id="sharecard"><div class="label">Share PURRVEILLANCE</div>
+        <button class="primary" data-share="house">🔑 Share house link<small>for Canada: can add and change</small></button>
+        <button class="primary ghostish" data-share="view">👀 Share view-only link<small>for family: can look, cannot change</small></button>
+        <div class="sub" id="sharemsg"></div></div>` : ''}
       <div class="furcast" id="furcast"><div class="fk"><span>🔮 FURCAST</span><span class="sub" id="fcwhen">${esc(L.longStamp(now).split(', ')[1])}</span></div><div id="fcbody" class="sub">Working out the odds…</div></div>
     </div></div>${nav('catflap')}`;
   for (const b of $app.querySelectorAll('[data-me]')) b.onclick = () => { S.me = b.dataset.me; LS.set('me', S.me); render(); };
   for (const a of $app.querySelectorAll('[data-fresh]')) a.onclick = () => { S.draft = null; };
   const nd = document.getElementById('nudge'); if (nd) nd.onclick = () => { S.filter = 'unnamed'; };
+  for (const b of $app.querySelectorAll('[data-share]')) b.onclick = () => shareLink(b.dataset.share);
   const fill = pos => {
     const body = document.getElementById('fcbody'); if (!body) return;
     const fc = L.furcast(S.sums, pos, Date.now());
@@ -1128,6 +1143,19 @@ function Meowmentum() {
   for (const b of $app.querySelectorAll('[data-p]')) b.onclick = () => { S.period = b.dataset.p; LS.set('period', S.period); render(); };
 }
 
+// ---------- share links (2026-10-05) ----------
+// House link: the full code, can change things (Canada). View-only link: the one-way view code (family).
+async function shareLink(kind) {
+  const base = location.origin + location.pathname;
+  const url = kind === 'house' ? `${base}?house=${encodeURIComponent(S.house)}` : `${base}?view=${S.store.viewCode}`;
+  const text = kind === 'house' ? 'Our PURRVEILLANCE house link. Anyone with it can add and change cats, so keep it between us.'
+    : 'Come and see our cats on PURRVEILLANCE. This link is view-only.';
+  const msg = document.getElementById('sharemsg');
+  if (navigator.share) { try { await navigator.share({ title: 'PURRVEILLANCE', text, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  try { await navigator.clipboard.writeText(url); if (msg) msg.textContent = (kind === 'house' ? 'House link' : 'View-only link') + ' copied.'; }
+  catch { if (msg) msg.innerHTML = `Copy blocked. Press and hold to copy:<div class="box">${esc(url)}</div>`; }
+}
+
 // ---------- setup and boot ----------
 function Setup(kind) {
   if (kind === 'noconfig') {
@@ -1166,12 +1194,18 @@ function seedDemo(store) {
 }
 
 async function boot() {
-  let house = params.get('house') || LS.get('house') || (DEMO ? 'demo-house-0000000000' : null);
+  // A link in the address bar wins over what this phone remembers; a house link wins over a view link.
+  // A view link is remembered separately and never overwrites a house code this phone already holds.
+  const urlView = isViewCode(params.get('view')) ? params.get('view') : null;
+  let house = params.get('house') || (urlView ? null : LS.get('house')) || (DEMO ? 'demo-house-0000000000' : null);
+  const view = house ? null : (urlView || (isViewCode(LS.get('view')) ? LS.get('view') : null));
   if (!DEMO && !configured()) return Setup('noconfig');
-  if (!house) return Setup('house');
+  if (!house && !view) return Setup('house');
   if (params.get('house')) LS.set('house', house);
-  S.house = house;
-  try { S.store = await openStore(house, { demo: DEMO }); }
+  if (urlView && !house) LS.set('view', urlView);
+  S.house = house; S.view = view;
+  const status = t => { if (t) $app.innerHTML = `<div class="setup"><div class="eyebrow">PURRVEILLANCE</div><div class="title">One moment</div><p>${esc(t)}</p><p class="sub">This happens once. Keep the app open.</p></div>`; };
+  try { S.store = await openStore(house, { demo: DEMO, view, onStatus: status }); }
   catch (e) { console.error(e); $app.innerHTML = `<div class="setup"><div class="title">Couldn't open the log</div><p>${esc(e.code || e.message || e)}</p><p class="sub">Check signal and reload.</p></div>`; return; }
   if (DEMO && params.has('seed')) seedDemo(S.store);
   let first = true;
@@ -1179,7 +1213,7 @@ async function boot() {
     if (err) { S.error = err.code || err.message; render(); return; }
     S.error = null; setData(d);
     // One-off per session: cats logged before numbering existed get the next numbers, oldest first, so no card says "Unnamed".
-    if (!S.backfilled) {
+    if (!S.backfilled && !S.view) {
       S.backfilled = true;
       const todo = S.data.cats.filter(c => L.isUnnamed(c) && !c.num).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
       (async () => { for (const c of todo) { try { await S.store.patch('cats', c.id, { num: S.nextNum++ }); } catch (x) { console.warn('number backfill', x); } } })();

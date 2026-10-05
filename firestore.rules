@@ -1,16 +1,50 @@
 rules_version = '2';
 // PURRVEILLANCE Firestore rules. Paste into Firebase console > Firestore Database > Rules > Publish.
-// Data lives under houses/{HOUSE}/{cats|sightings|photos}/{id}. Only a phone that knows the
-// 20-character house code (from the bookmarked link) can name the path. The houses list itself
-// cannot be read, so codes cannot be browsed. Nothing can be deleted from the app.
+//
+// Two kinds of link (2026-10-05, view-only family link):
+//  HOUSE link  ?house=<20-char code>  sees and changes everything (Beth and Canada).
+//  VIEW link   ?view=<64-char code>   sees everything, changes nothing (family).
+// The view code is SHA-256 of the house code, worked out on the phone, so it can never be turned back into
+// the house code. Data lives under houses/{VIEW}/{cats|sightings|photos}/{id}. Anyone signed in who knows
+// the view code can read it. Writing needs a members/{uid} doc, and that doc can only be made by sending the
+// full house code, checked against meta/owner. Neither meta/owner nor members can be read by anyone, so a
+// view link never reveals the house code.
+// LEGACY: data written before 2026-10-05 sits under houses/{HOUSE}. It stays readable and writable until the
+// app copies it to the view path and writes meta/moved, after which it is frozen. Nothing can be deleted.
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /houses/{house}/{coll}/{id} {
-      allow get, list: if request.auth != null && house.size() >= 20
-        && coll in ['cats', 'sightings', 'photos'];
-      allow create, update: if request.auth != null && house.size() >= 20
-        && coll in ['cats', 'sightings', 'photos']
+    function signedIn() { return request.auth != null; }
+    function shared(house) { return house.size() == 64; }
+    function legacy(house) { return house.size() >= 20 && house.size() < 64; }
+    function isMember(house) { return exists(/databases/$(database)/documents/houses/$(house)/members/$(request.auth.uid)); }
+    function moved(house) { return exists(/databases/$(database)/documents/houses/$(house)/meta/moved); }
+    function okData(coll) {
+      return coll in ['cats', 'sightings', 'photos']
         && (coll != 'photos' || request.resource.data.data.size() < 400000);
+    }
+
+    match /houses/{house}/{coll}/{id} {
+      allow get, list: if signedIn() && house.size() >= 20 && coll in ['cats', 'sightings', 'photos'];
+      allow create, update: if signedIn() && okData(coll)
+        && ((legacy(house) && !moved(house)) || (shared(house) && isMember(house)));
+    }
+
+    match /houses/{house}/meta/{name} {
+      // move: the record that the copy from the legacy path finished. Readable so a phone knows not to copy again.
+      allow get: if signedIn() && shared(house) && name == 'move';
+      allow create, update: if signedIn() && shared(house) && name == 'move' && isMember(house);
+      // owner: the house code, written once by the first phone to open the house link. Never readable.
+      allow create: if signedIn() && shared(house) && name == 'owner'
+        && request.resource.data.keys().hasOnly(['key', 'at'])
+        && request.resource.data.key is string && legacy(request.resource.data.key);
+      // moved: freezes the legacy path once its data has been copied.
+      allow create: if signedIn() && legacy(house) && name == 'moved';
+    }
+
+    match /houses/{house}/members/{uid} {
+      allow create, update: if signedIn() && shared(house) && uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['key', 'at'])
+        && request.resource.data.key == get(/databases/$(database)/documents/houses/$(house)/meta/owner).data.key;
     }
   }
 }

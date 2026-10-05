@@ -336,3 +336,11 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .lookname small { color: var(--caption); font-size: 12px; }
 /* The household count always shows, even when crowded pins hide their labels */
 .pin .hcount { position: absolute; top: -6px; right: -8px; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--ink); color: #FFFFFF; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+
+/* Share links and the view-only banner (2026-10-05) */
+.banner.view { background: var(--ink); color: #FFFFFF; }
+.sharecard { background: var(--surface); border-radius: 18px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.sharecard .primary { height: auto; min-height: 56px; padding: 10px 16px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; }
+.sharecard .primary small { font-size: 12px; font-weight: 400; opacity: 0.85; }
+.sharecard .primary.ghostish { background: var(--ink); }
+.sharecard .box { margin-top: 6px; word-break: break-all; font-size: 12px; }

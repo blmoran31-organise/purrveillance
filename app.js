@@ -18,6 +18,7 @@ const S = {
   pos: null, posAt: 0, maps: [], stream: null, draft: null, filter: 'all', period: LS.get('period') || 'week',
   noRouter: params.has('norouter'),
   renaming: null, error: null, toast: null, showAllChips: false, mapMode: LS.get('mapmode') || 'all',
+  coatPick: [], coatNone: false, matching: false, picked: [], lastMatch: null, sortQ: null, sortI: 0, sortDraft: null,
 };
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -149,11 +150,13 @@ function render() {
   const r = route();
   killMaps();
   if (r.name !== 'camera' && r.name !== 'guest') stopCamera();
+  if (r.name !== 'catalogue') { S.matching = false; S.picked = []; }
+  if (r.name !== 'sort') { S.sortQ = null; S.sortI = 0; S.sortDraft = null; }
   if (r.name !== 'cat') { S.timing = null; S.renaming = null; S.rowOpen = null; S.moving = null; S.merging = null; S.confirmDel = null; S.placingSight = null; S.editing = null; S.editDraft = null; S.focusing = null; }
   // View-only link: the screens that only add or change things are not reachable. The rules refuse the writes anyway.
   if (S.view && VIEW_BLOCKED.includes(r.name)) { location.replace('#/catflap'); return; }
   if (r.name === 'guest' && !(S.guest && S.store && S.store.guestOk)) { location.replace('#/catflap'); return; }
-  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor, catwalk: Catwalk, guest: GuestCam };
+  const screens = { catflap: Catflap, map: MeowMap, camera: Pawparazzi, repurrt: Repurrt, meowmeries: Meowmeries, catalogue: Catalogue, cat: CatEntry, stats: Meowmentum, deleted: Deleted, photos: Gallery, crop: CropEditor, catwalk: Catwalk, guest: GuestCam, sort: ColourSort };
   // A screen that throws still gets its photos and its toast, and the error shows on screen (live bug 2026-10-03).
   try { (screens[r.name] || Catflap)(r.arg); }
   catch (x) { console.error('screen ' + r.name, x); showCrash((x && x.message) || String(x)); }
@@ -166,10 +169,10 @@ function render() {
 }
 
 // Everything that adds, edits or deletes, removed from the page on a view-only link (2026-10-05).
-const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted', 'catwalk'];
+const VIEW_BLOCKED = ['camera', 'repurrt', 'meowmeries', 'crop', 'deleted', 'catwalk', 'sort'];
 const VIEW_HIDE = ['.logs', '.who', '.hint', '#nudge', '.camfab', '#nophoto', '.binlink', '#pencil', '#fav', '#editdetails', '#delcat', '#delcatyes', '#merge', '#addphoto',
   '#gprofile', '#glives', '#gcrop', '#ganother', '#gwrong', '.srow2 .acts', '[data-delsight]', '[data-delphoto]', '[data-crop]', '[data-lives]', '[data-wrong]', '[data-another]', '[data-moveto]',
-  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet', '#catwalkcard', '#movehome', '#hsmove', '[data-stime]'].join(',');
+  '[data-placesight]', '[data-unfriend]', '[data-lookmerge]', '[data-mergein]', '[data-restore]', '#sharecard', '#unmarkhome', '#lphint', '#livesheet', '#catwalkcard', '#movehome', '#hsmove', '[data-stime]', '#sortbtn', '#matchbtn', '#matchbar', '#matchdone', '#exportbtn'].join(',');
 
 // ---------- 1. CATFLAP (home, as approved 2026-10-03 22:27) ----------
 // Top to bottom: header with B/C, streak, three ways to log, four stats, Mewsflash, latest sightings, extras.
@@ -223,6 +226,7 @@ function Catflap() {
         <button class="primary ghostish" data-share="view">👀 Share view-only link<small>for family: can look, cannot change</small></button>
         <button class="primary guestish" data-share="guest">🎟️ Share guest link<small>for anyone: can look, and send you a new cat to approve</small></button>
         <button class="link-amber" id="newguest">Make a new guest link (the old one stops adding)</button>
+        <button class="primary ghostish" id="exportbtn">⬇️ Download the whole log<small>JSON plus CSV, to this phone</small></button>
         <div class="sub" id="sharemsg"></div></div>` : ''}
       ${S.guest && S.store && S.store.guestOk ? guestCard() : ''}
       ${S.view ? '' : dropsCard()}
@@ -233,6 +237,7 @@ function Catflap() {
   for (const a of $app.querySelectorAll('[data-fresh]')) a.onclick = () => { S.draft = null; };
   const nd = document.getElementById('nudge'); if (nd) nd.onclick = () => { S.filter = 'unnamed'; };
   for (const b of $app.querySelectorAll('[data-share]')) b.onclick = () => shareLink(b.dataset.share);
+  const ex = document.getElementById('exportbtn'); if (ex) ex.onclick = () => act(exportLog);
   const ng = document.getElementById('newguest'); if (ng) ng.onclick = () => act(async () => { await S.store.guestKey(true); return 'New guest link made · share it again; the old one can still look but cannot add'; });
   wireCatwalkCard();
   wireDrops();
@@ -783,23 +788,104 @@ function Catalogue() {
   if (f === 'fav') list = list.filter(e => e.cat.favourite);
   if (f === 'pet') list = list.filter(e => e.petted > 0);
   if (f === 'unnamed') list = list.filter(e => L.isUnnamed(e.cat));
+  // Coat filter (entry 178): the cat has ALL ticked coats; "No colour yet" shows the cats still to sort.
+  list = L.coatFilter(list, S.coatPick, S.coatNone);
   list.sort((a, b) => (b.last || b.cat.createdAt || 0) - (a.last || a.cat.createdAt || 0));
+  // Match mode: the grid sorts by distance from the first-picked cat, so neighbours sit together.
+  S.picked = S.picked.filter(id => S.byId.has(id));
+  if (S.matching && S.picked.length) list = L.byDistanceFrom(list, S.byId.get(S.picked[0]));
+  const anchor = S.matching && S.picked.length ? L.placeOf(S.byId.get(S.picked[0])) : null;
   const card = e => {
     const c = e.cat, unnamed = L.isUnnamed(c);
     const meta = `${e.count} sighting${e.count === 1 ? '' : 's'}${e.last ? ' · ' + (unnamed ? 'seen ' : 'last seen ') + L.dayWord(e.last, now) : ''}`;
-    return `<a class="gcard" href="#/cat/${esc(c.id)}"><div class="gimg" style="background-color:${swatch(c)}"${photoAttr(c)}>
+    const inner = `<div class="gimg" style="background-color:${swatch(c)}"${photoAttr(c)}>
       <span class="ini">${esc(L.initial(c))}</span>${unnamed ? '<span class="newtag">NEW</span>' : ''}<span class="gheart">${I.heart(c.favourite)}</span></div>
-      <div class="gname ${unnamed ? 'grey' : ''}">${esc(L.displayName(c))}</div><div class="gmeta">${esc(meta)}</div></a>`;
+      <div class="gname ${unnamed ? 'grey' : ''}">${esc(L.displayName(c))}</div><div class="gmeta">${esc(meta)}</div>`;
+    if (!S.matching) return `<a class="gcard" href="#/cat/${esc(c.id)}">${inner}</a>`;
+    const k = S.picked.indexOf(c.id), p = anchor && k !== 0 ? L.placeOf(e) : null;
+    const dist = p ? `<div class="gmeta">${esc(L.distWord(L.metres(anchor, p)))} from ${esc(L.displayName(S.byId.get(S.picked[0]).cat))}</div>` : '';
+    return `<button class="gcard pick ${k >= 0 ? 'picked' : ''}" data-pick="${esc(c.id)}" aria-pressed="${k >= 0}">${inner}${dist}${k >= 0 ? `<span class="pickno">${k + 1}</span>` : ''}</button>`;
   };
   const binned = S.raw ? S.raw.cats.filter(c => c.deleted || c.mergedInto).length + S.raw.sightings.filter(s => s.deleted || s.photoDeleted).length : 0;
   const F = [['all', 'All'], ['fav', I.heart(true).replace('width="22" height="22"', 'width="14" height="14"') + 'Favourites'], ['pet', 'Petted'], ['unnamed', 'Unnamed']];
+  const todo = S.sums.filter(e => L.needsCoat(e.cat)).length;
+  const coatOn = S.coatPick.length || S.coatNone;
+  const chips = [...L.COAT_LIST, 'Long-haired'].map(k => `<button data-cf="${esc(k)}" class="${k === 'Long-haired' ? 'tick ' : ''}${S.coatPick.includes(k) ? 'on' : ''}">${esc(k)}</button>`).join('')
+    + `<button data-cfnone class="none ${S.coatNone ? 'on' : ''}">No colour yet</button>`;
+  const pickedNames = S.picked.map(id => L.displayName(S.byId.get(id).cat));
+  const lm = S.lastMatch;
   $app.innerHTML = `${banner()}<div class="screen">
     <div class="head" style="flex-direction:column;align-items:stretch"><div style="display:flex;justify-content:space-between;align-items:flex-end"><div class="title">CATALOGUE</div><div class="sub">${S.sums.length} cat${S.sums.length === 1 ? '' : 's'}</div></div>
-      <div class="filters">${F.map(([k, t]) => `<button data-f="${k}" class="${f === k ? 'on' : ''}">${t}</button>`).join('')}</div></div>
-    <div class="pad">${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty">${S.sums.length ? 'No cats in this list yet.' : 'No cats yet.<br>Tap Pawparazzi on the Catflap to log the first one.'}</div>`}
+      ${todo ? `<a class="sortbtn" id="sortbtn" href="#/sort">🎨 Sort by colour <span>(${todo} to do)</span></a>` : ''}
+      <div class="filters">${F.map(([k, t]) => `<button data-f="${k}" class="${f === k ? 'on' : ''}">${t}</button>`).join('')}</div>
+      <div class="coatfilter"><div class="coats">${chips}</div>
+        <div class="cfcount"><span id="cfcount">${coatOn ? `${list.length} cat${list.length === 1 ? ' matches' : 's match'}` : 'Tick coats to filter'}</span>${coatOn ? '<button class="link-amber" id="cfclear">Clear</button>' : ''}
+          <button class="matchbtn ${S.matching ? 'on' : ''}" id="matchbtn">${S.matching ? 'Done matching' : '🔗 Match'}</button></div></div></div>
+    <div class="pad">
+      ${lm ? `<div class="matchdone" id="matchdone"><span>${esc(lm.text)}</span><button class="ghost" id="matchundo">Undo</button></div>` : ''}
+      ${S.matching ? `<div class="hint">${S.picked.length ? `Picked: ${esc(pickedNames.join(', '))}. The first one keeps its name. Nearest to ${esc(pickedNames[0])} first.` : 'Tap the cats that are the same cat. The first one you tap keeps its name.'}</div>` : ''}
+      ${list.length ? `<div class="grid">${list.map(card).join('')}</div>` : `<div class="empty">${S.sums.length ? 'No cats in this list yet.' : 'No cats yet.<br>Tap Pawparazzi on the Catflap to log the first one.'}</div>`}
       <a class="binlink" href="#/deleted">🗑️ Recently deleted${binned ? ` (${binned})` : ''}</a></div>
+    ${S.matching ? `<div class="matchbar" id="matchbar"><button class="ghost" id="matchcancel">Cancel</button><button class="primary" id="matchgo" ${S.picked.length < 2 ? 'disabled' : ''}>These are the same cat${S.picked.length >= 2 ? ` (${S.picked.length})` : ''}</button></div>` : ''}
   </div>${nav('catalogue')}`;
   for (const b of $app.querySelectorAll('[data-f]')) b.onclick = () => { S.filter = b.dataset.f; render(); };
+  for (const b of $app.querySelectorAll('[data-cf]')) b.onclick = () => { const k = b.dataset.cf; S.coatNone = false; S.coatPick = S.coatPick.includes(k) ? S.coatPick.filter(x => x !== k) : [...S.coatPick, k]; render(); };
+  const cn = $app.querySelector('[data-cfnone]'); if (cn) cn.onclick = () => { S.coatNone = !S.coatNone; S.coatPick = []; render(); };
+  const cc = document.getElementById('cfclear'); if (cc) cc.onclick = () => { S.coatPick = []; S.coatNone = false; render(); };
+  const mb = document.getElementById('matchbtn'); if (mb) mb.onclick = () => { S.matching = !S.matching; S.picked = []; render(); };
+  const mc = document.getElementById('matchcancel'); if (mc) mc.onclick = () => { S.matching = false; S.picked = []; render(); };
+  for (const b of $app.querySelectorAll('[data-pick]')) b.onclick = () => { const id = b.dataset.pick; S.picked = S.picked.includes(id) ? S.picked.filter(x => x !== id) : [...S.picked, id]; render(); };
+  const mg = document.getElementById('matchgo'); if (mg) mg.onclick = () => { if (S.picked.length < 2) return; const [keep, ...rest] = S.picked; mg.disabled = true; act(async () => { const r = await matchMerge(keep, rest); S.matching = false; S.picked = []; S.lastMatch = r; return r.text; }); };
+  const mu = document.getElementById('matchundo'); if (mu) mu.onclick = () => { const r = S.lastMatch; S.lastMatch = null; act(() => undoMatch(r)); };
+}
+
+// ---------- COLOUR SORTER (entry 178): one cat at a time, coat chips, Next saves, Skip leaves it ----------
+// A cat that only has the old single coat string keeps that text as coatWas, so nothing typed is lost.
+// The queue is fixed when the sorter opens, so "12 of 64" does not jump as cats are saved on either phone.
+function ColourSort() {
+  if (!S.sortQ) { S.sortQ = S.sums.filter(e => L.needsCoat(e.cat)).sort((a, b) => b.count - a.count).map(e => e.cat.id); S.sortI = 0; S.sortDone = 0; S.sortSkip = 0; }
+  const Q = S.sortQ;
+  while (S.sortI < Q.length && !S.byId.has(Q[S.sortI])) S.sortI++;
+  if (S.sortI >= Q.length) {
+    const left = S.sums.filter(e => L.needsCoat(e.cat)).length;
+    $app.innerHTML = `${banner()}<div class="screen"><div class="formhead"><a class="back" href="#/catalogue">${I.back}Catalogue</a><div style="font-size:18px;font-weight:700">SORT BY COLOUR</div><div style="width:50px"></div></div>
+      <div class="pad stack" style="text-align:center;padding-top:40px"><div style="font-size:48px">🎨</div><div class="title" id="sortend">All sorted</div>
+        <div class="sub">${S.sortDone} sorted${S.sortSkip ? `, ${S.sortSkip} skipped` : ''}.${left ? ` ${left} still ${left === 1 ? 'has' : 'have'} no colour; the button stays on The Catalogue for ${left === 1 ? 'it' : 'them'}.` : ''}</div>
+        <a class="primary" href="#/catalogue" id="sortback">Back to The Catalogue</a></div></div>${nav('catalogue')}`;
+    return;
+  }
+  const id = Q[S.sortI], e = S.byId.get(id), c = e.cat;
+  const d = S.sortDraft && S.sortDraft.id === id ? S.sortDraft : (S.sortDraft = { id, coats: [], longHaired: false, ph: 0 });
+  const photos = catPhotos(e);
+  const ph = Math.min(d.ph, Math.max(0, photos.length - 1));
+  $app.innerHTML = `${banner()}<div class="screen">
+    <div class="formhead"><a class="back" href="#/catalogue">${I.back}Catalogue</a><div style="font-size:18px;font-weight:700">SORT BY COLOUR</div><div class="sub" id="sortprog">${S.sortI + 1} of ${Q.length}</div></div>
+    <div class="pad stack" style="padding-bottom:24px">
+      <div class="sortbar"><i style="width:${Math.round(100 * S.sortI / Q.length)}%"></i></div>
+      <div class="sortphoto" id="sortphoto" style="background-color:${swatch(c)}"${photos.length ? ` data-photo="${esc(photos[ph].photoId)}"` : ''}><span class="ini">${esc(L.initial(c))}</span>
+        ${photos.length > 1 ? `<span class="sortdots">${photos.map((_, i) => `<i class="${i === ph ? 'on' : ''}"></i>`).join('')}</span>` : ''}</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline"><b style="font-size:18px">${esc(L.displayName(c))}</b><span class="sub">${e.count} sighting${e.count === 1 ? '' : 's'}${photos.length > 1 ? ` · ${ph + 1} of ${photos.length} photos, swipe` : photos.length ? '' : ' · no photo'}</span></div>
+      <div class="label">Coat (tick all that fit)</div>
+      <div class="coats">${L.COAT_LIST.map(k => `<button data-scoat="${k}" class="${d.coats.includes(k) ? 'on' : ''}">${k}</button>`).join('')}<button data-slong class="tick ${d.longHaired ? 'on' : ''}">${d.longHaired ? '✓ ' : ''}Long-haired</button></div>
+      <div class="sub">${d.coats.length || d.longHaired ? 'Saves as: ' + esc(L.coatText(d.coats, d.longHaired)) : 'Tick at least one, or Skip.'}</div>
+      <div class="sortacts"><button class="ghost" id="sortskip">Skip</button><button class="primary" id="sortnext" ${d.coats.length || d.longHaired ? '' : 'disabled'}>Next ${I.next}</button></div>
+    </div></div>${nav('catalogue')}`;
+  for (const b of $app.querySelectorAll('[data-scoat]')) b.onclick = () => { const k = b.dataset.scoat; d.coats = d.coats.includes(k) ? d.coats.filter(x => x !== k) : [...d.coats, k]; render(); };
+  $app.querySelector('[data-slong]').onclick = () => { d.longHaired = !d.longHaired; render(); };
+  document.getElementById('sortskip').onclick = () => { S.sortI++; S.sortSkip++; S.sortDraft = null; render(); };
+  document.getElementById('sortnext').onclick = ev => {
+    if (!(d.coats.length || d.longHaired)) return;
+    ev.currentTarget.disabled = true;
+    act(async () => {
+      await S.store.patch('cats', id, { coats: d.coats, longHaired: d.longHaired, coat: L.coatText(d.coats, d.longHaired), swatch: L.swatchFromCoats(d.coats, id, d.longHaired), colouredAt: Date.now(), colouredBy: S.me || 'unknown', ...(c.coat && !Array.isArray(c.coats) ? { coatWas: c.coat } : {}) });
+      S.sortI++; S.sortDone++; S.sortDraft = null;
+      return `${L.displayName(c)}: ${L.coatText(d.coats, d.longHaired)}`;
+    });
+  };
+  // Swipe for the cat's other photos.
+  let x0 = null; const box = document.getElementById('sortphoto');
+  box.onpointerdown = ev => { x0 = ev.clientX; };
+  box.onpointerup = ev => { if (x0 === null) return; const dx = ev.clientX - x0; x0 = null; if (dx < -50 && ph < photos.length - 1) { d.ph = ph + 1; render(); } else if (dx > 50 && ph > 0) { d.ph = ph - 1; render(); } };
 }
 
 // ---------- 6. CATALOGUE ENTRY ----------
@@ -1119,11 +1205,53 @@ async function mergeCats(keepId, loserId) {
 }
 async function unmerge(loserId) {
   const lose = S.raw.cats.find(c => c.id === loserId);
-  for (const s of S.raw.sightings.filter(s => s.mergedFrom === loserId && s.catId === lose.mergedInto)) await S.store.patch('sightings', s.id, { catId: loserId, mergedFrom: null });
-  const keep = S.raw.cats.find(c => c.id === lose.mergedInto);
-  if (keep && (keep.homesMarked || []).some(h => h.fromCat === loserId)) await S.store.patch('cats', keep.id, { homesMarked: keep.homesMarked.filter(h => h.fromCat !== loserId) });
-  await S.store.patch('cats', loserId, { mergedInto: null, unmergedAt: Date.now() });
+  await L.commitWrites(S.store, L.unmergeWrites(S.raw, loserId, Date.now()));
   return `${L.displayName(lose)} is its own cat again`;
+}
+
+// MATCH (entry 178): fold every later-picked cat into the first-picked one in ONE pass, so the keeper's aliases and
+// marked homes are written once. The first-picked name stays; photos and sightings are concatenated (counts follow);
+// the earliest createdAt wins. Each merged-away cat is kept with mergedInto, so Recently deleted can undo it one at a
+// time, and the keeper keeps its before-values (mergeBefore) so the Undo on the Catalogue puts the whole match back.
+// Every write goes in ONE Firestore batch (entry 178 push): a dropped signal leaves no merge or a whole one.
+async function matchMerge(keepId, loserIds) {
+  const keep = S.byId.get(keepId), losers = loserIds.map(id => S.byId.get(id)).filter(Boolean);
+  if (!keep || !losers.length) throw new Error('those cats are no longer in The Catalogue');
+  const { writes, plan, batch } = L.matchWrites(keep, losers, { at: Date.now(), me: S.me, photoOf: catPhotoId });
+  await L.commitWrites(S.store, writes);
+  const k = keep.cat, names = losers.map(e => L.displayName(e.cat));
+  const who = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  const text = `Merged ${who} into ${L.displayName(k)}: ${plan.photos} photo${plan.photos === 1 ? '' : 's'}, ${plan.sightings} sighting${plan.sightings === 1 ? '' : 's'}`;
+  return { batch, keepId, loserIds: losers.map(e => e.cat.id), text };
+}
+async function undoMatch(r) {
+  const { writes, undone } = L.undoMatchWrites(S.raw, r, Date.now());
+  if (!undone) return "Already undone from Recently deleted";
+  await L.commitWrites(S.store, writes);
+  return `Match undone: ${r.loserIds.length + 1} cats are separate again`;
+}
+
+// ---------- EXPORT (entry 178, brief Job 10): the whole log as JSON plus CSV, downloaded to the phone ----------
+// Photos go out as ids and paths, never bytes. Deleted and merged records are included, marked, so nothing is lost.
+async function exportLog() {
+  const day = new Date(); const ymd = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+  const log = L.exportLog(S.raw, S.sums);
+  const json = JSON.stringify({ app: 'PURRVEILLANCE', exportedAt: new Date().toISOString(), counts: { cats: log.cats.length, sightings: log.sightings.length, photos: log.photos.length, households: log.households.length }, ...log }, null, 2);
+  const catOf = new Map(log.cats.map(c => [c.id, c]));
+  const row = (c, s) => ({ cat_id: c ? c.id : (s && s.catId) || '', cat_name: c ? L.displayName(c) : '', coat: c ? L.coatText(L.coatsOf(c), L.isLongHaired(c)) : '', cat_deleted: c ? !!c.deleted : '', merged_into: c ? c.mergedInto || '' : '',
+    sighting_id: s ? s.id : '', at: s ? new Date(s.at).toISOString() : '', lat: s ? s.lat : '', lng: s ? s.lng : '', seen_by: s ? s.seenBy || '' : '', spotted_by: s ? s.spottedBy || '' : '', inside: s ? s.insideOutside || '' : '', petted: s ? !!s.petted : '', lives_here: s ? !!s.livesHere : '', photo_id: s ? s.photoId || '' : '', sighting_deleted: s ? !!s.deleted : '', note: s ? s.note || '' : '' });
+  const seen = new Set(log.sightings.map(s => s.catId));
+  const rows = [...log.sightings.map(s => row(catOf.get(s.catId), s)), ...log.cats.filter(c => !seen.has(c.id)).map(c => row(c, null))];
+  const csv = L.toCsv(rows);
+  const files = [[`purrveillance-${ymd}.json`, json, 'application/json'], [`purrveillance-${ymd}.csv`, '\ufeff' + csv, 'text/csv']];
+  for (const [name, text, type] of files) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    await new Promise(r => setTimeout(r, 400));
+  }
+  S.lastExport = files.map(([name, text]) => ({ name, bytes: new Blob([text]).size }));
+  return `Downloaded ${files[0][0]} and ${files[1][0]}: ${log.cats.length} cats, ${log.sightings.length} sightings, ${log.photos.length} photos, ${log.households.length} households`;
 }
 
 // ---------- ALL PHOTOS: a full-screen swipe gallery of every photo of one cat, newest first ----------

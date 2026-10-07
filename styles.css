@@ -420,3 +420,33 @@ textarea.field { height: 64px; padding: 10px 14px; font-weight: 400; resize: non
 .hstrip .hsbtn.primary { background: var(--moss); color: #FFFFFF; }
 .pin.house2.movinghouse { filter: drop-shadow(0 0 0 #000) drop-shadow(0 0 6px rgba(233,162,59,0.95)); }
 .homeline .ghost + .ghost { margin-left: 8px; }
+
+/* entry 178: colour sorter, coat filter, Match mode */
+.sortbtn { display: flex; align-items: center; justify-content: center; gap: 6px; height: 44px; border-radius: 14px; background: var(--ink); color: #FFFFFF; font-weight: 700; font-size: 15px; text-decoration: none; }
+.sortbtn span { font-weight: 500; opacity: .8; }
+.coatfilter { display: flex; flex-direction: column; gap: 8px; }
+.coatfilter .coats button { height: 30px; padding: 0 10px; font-size: 12px; }
+.coatfilter .coats button.none { border-style: dashed; }
+.cfcount { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--caption); }
+.cfcount #cfcount { flex: 1; }
+.matchbtn { height: 32px; padding: 0 12px; border-radius: 16px; border: 1px solid var(--ink); background: var(--ground); font-size: 13px; font-weight: 600; }
+.matchbtn.on { background: var(--ink); color: #FFFFFF; }
+button.gcard.pick { position: relative; text-align: left; background: none; border: 0; padding: 0; font: inherit; color: inherit; }
+button.gcard.pick .gimg { outline: 3px solid transparent; outline-offset: 2px; }
+button.gcard.picked .gimg { outline-color: var(--moss); }
+.pickno { position: absolute; top: 6px; left: 6px; width: 26px; height: 26px; border-radius: 13px; background: var(--moss); color: #FFFFFF; font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+.matchbar { position: sticky; bottom: 0; display: flex; gap: 10px; padding: 10px 16px; background: var(--ground); border-top: 1px solid var(--line); }
+.matchbar .primary { flex: 1; }
+.matchbar .primary:disabled { opacity: .45; }
+.matchdone { display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 12px; border-radius: 12px; background: var(--surface); font-size: 13px; }
+.matchdone span { flex: 1; }
+.sortbar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.sortbar i { display: block; height: 100%; background: var(--moss); }
+.sortphoto { position: relative; aspect-ratio: 1 / 1; width: 100%; border-radius: 18px; display: flex; align-items: center; justify-content: center; color: #FFFFFF; font-size: 56px; font-weight: 700; touch-action: pan-y; user-select: none; }
+.sortdots { position: absolute; bottom: 10px; left: 0; right: 0; display: flex; justify-content: center; gap: 6px; }
+.sortdots i { width: 7px; height: 7px; border-radius: 4px; background: rgba(255, 255, 255, .5); }
+.sortdots i.on { background: #FFFFFF; }
+.sortacts { display: flex; gap: 10px; }
+.sortacts .primary { flex: 1; }
+.sortacts .primary:disabled { opacity: .45; }
+a.primary { display: flex; align-items: center; justify-content: center; text-decoration: none; }

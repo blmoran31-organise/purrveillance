@@ -81,6 +81,14 @@ async function firebaseStore(house, view, onStatus, guest) {
     async put(name, id, data) { if (readOnly) throw READ_ONLY; await fs.setDoc(fs.doc(db, 'houses', root, name, id), data); return id; },
     // A changed photo (focal point, delete) must not be served from the cache afterwards.
     async patch(name, id, data) { if (readOnly) throw READ_ONLY; await fs.updateDoc(fs.doc(db, 'houses', root, name, id), data); if (name === 'photos') photoCache.delete(id); },
+    // ONE BATCH (entry 178 push): every [collection, id, fields] update lands together or none does.
+    async commit(writes) {
+      if (readOnly) throw READ_ONLY;
+      const b = fs.writeBatch(db);
+      for (const [name, id, data] of writes) b.update(fs.doc(db, 'houses', root, name, id), data);
+      await b.commit();
+      for (const [name, id] of writes) if (name === 'photos') photoCache.delete(id);
+    },
     async photo(id) {
       if (!photoCache.has(id)) photoCache.set(id, fs.getDoc(fs.doc(db, 'houses', root, 'photos', id)).then(d => d.exists() ? d.data() : null));
       return photoCache.get(id);
@@ -133,6 +141,12 @@ function demoStore(house) {
     subscribe(f) { subs.add(f); queueMicrotask(() => f(view())); return () => subs.delete(f); },
     async put(name, id, d) { data[name][id] = d; save(); if (name !== 'photos') emit(); return id; },
     async patch(name, id, d) { data[name][id] = { ...data[name][id], ...d }; save(); if (name !== 'photos') emit(); },
+    // Same all-or-nothing rule as Firestore: a missing record refuses the whole list before anything changes.
+    async commit(writes) {
+      for (const [name, id] of writes) if (!data[name] || !data[name][id]) throw new Error('no such record: ' + name + '/' + id);
+      for (const [name, id, d] of writes) data[name][id] = { ...data[name][id], ...d };
+      save(); emit();
+    },
     async photo(id) { return data.photos[id] || null; },
     reset(seed) { data = seed || { cats: {}, sightings: {}, photos: {} }; save(); emit(); },
   };

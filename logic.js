@@ -505,3 +505,105 @@ export function homeMoves(summaries, dLat, dLng, by, now) {
   }
   return out;
 }
+
+// ---------- entry 178 (2026-10-06): colour sorter, coat filter, Match mode, Export ----------
+// A cat still to sort: no coat chip set and no Long-haired tick (the old single `coat` string counts as set).
+export function needsCoat(cat) { return coatsOf(cat).length === 0 && !isLongHaired(cat); }
+// Catalogue coat filter: the cat has ALL ticked coats ("Long-haired" is the tick); 'none' = no colour yet.
+export function coatFilter(summaries, picked, none = false) {
+  if (none) return summaries.filter(e => needsCoat(e.cat));
+  if (!picked || !picked.length) return summaries.slice();
+  return summaries.filter(e => { const c = coatsOf(e.cat); return picked.every(k => k === 'Long-haired' ? isLongHaired(e.cat) : c.includes(k)); });
+}
+// Where a cat "is", for sorting by distance: its home, else its latest sighting with a place.
+export function placeOf(summary) {
+  const h = homeOf(summary); if (h) return { lat: h.lat, lng: h.lng };
+  const s = summary.sightings.find(x => cleanPlace(x.lat, x.lng)); return s ? cleanPlace(s.lat, s.lng) : null;
+}
+// Sort by distance from an anchor cat (anchor first); cats with no place go last, in the order given.
+export function byDistanceFrom(summaries, anchor) {
+  const a = anchor && placeOf(anchor);
+  const d = e => e === anchor ? -1 : a && placeOf(e) ? metres(a, placeOf(e)) : Infinity;
+  return summaries.map((e, i) => ({ e, i, d: d(e) })).sort((x, y) => x.d - y.d || x.i - y.i).map(x => x.e);
+}
+// What a Match merge will do: the first-picked cat keeps its name; photos and sightings are concatenated (so counts
+// sum), and the earliest createdAt wins. Returns the figures the result line quotes.
+export function matchPlan(keep, losers) {
+  const all = [keep, ...losers];
+  const photos = new Set(); for (const e of all) for (const s of e.sightings) if (s.photoId && !s.photoDeleted) photos.add(s.photoId);
+  const created = Math.min(...all.map(e => e.cat.createdAt || Infinity));
+  return { sightings: all.reduce((n, e) => n + e.sightings.length, 0), photos: photos.size, createdAt: Number.isFinite(created) ? created : (keep.cat.createdAt || null) };
+}
+// ONE BATCH (entry 178 push): a merge and its undo are each a single list of [collection, id, fields] writes,
+// committed together, so a dropped signal leaves either no merge or a whole one. Firestore caps a batch at 500.
+export const BATCH_MAX = 500;
+export async function commitWrites(store, writes) {
+  if (!writes.length) return;
+  if (writes.length > BATCH_MAX) throw new Error(`that is ${writes.length} changes in one go, over the ${BATCH_MAX} limit; nothing was changed`);
+  await store.commit(writes);
+}
+// MATCH: fold `losers` into `keep`. `photoOf(cat)` is the app's chosen-photo rule (it depends on hidden photos).
+export function matchWrites(keep, losers, { at, me, photoOf = c => c.thumbPhotoId || null }) {
+  const plan = matchPlan(keep, losers), batch = 'm' + at, k = keep.cat, writes = [];
+  for (const lose of losers) for (const s of lose.sightings) writes.push(['sightings', s.id, { catId: k.id, mergedFrom: lose.cat.id }]);
+  const patch = {
+    aliases: [...(k.aliases || []), ...losers.map(e => displayName(e.cat))],
+    mergeBefore: { batch, aliases: k.aliases || [], thumbPhotoId: k.thumbPhotoId || null, favourite: !!k.favourite, createdAt: k.createdAt || null, homesMarked: k.homesMarked || [] },
+  };
+  if (!photoOf(k)) { const p = losers.map(e => photoOf(e.cat)).find(Boolean); if (p) patch.thumbPhotoId = p; }
+  if (!k.favourite && losers.some(e => e.cat.favourite)) patch.favourite = true;
+  const homes = losers.flatMap(e => (e.cat.homesMarked || []).map(h => ({ ...h, fromCat: e.cat.id })));
+  if (homes.length) patch.homesMarked = [...(k.homesMarked || []), ...homes];
+  if (plan.createdAt && (!k.createdAt || plan.createdAt < k.createdAt)) patch.createdAt = plan.createdAt;
+  writes.push(['cats', k.id, patch]);
+  for (const e of losers) writes.push(['cats', e.cat.id, { mergedInto: k.id, mergedAt: at, mergedBy: me || 'unknown', mergeBatch: batch, aliasAdded: displayName(e.cat), keepCreatedAt: k.createdAt || null }]);
+  return { writes, plan, batch };
+}
+// UNDO on the Catalogue: the whole Match back, from the raw (unsummarised) log.
+export function undoMatchWrites(raw, r, at) {
+  const keep = raw.cats.find(c => c.id === r.keepId), writes = [];
+  let undone = 0;
+  for (const id of r.loserIds) {
+    const lose = raw.cats.find(c => c.id === id);
+    if (!lose || lose.mergedInto !== r.keepId || lose.mergeBatch !== r.batch) continue;
+    undone++;
+    for (const s of raw.sightings.filter(s => s.mergedFrom === id && s.catId === r.keepId)) writes.push(['sightings', s.id, { catId: id, mergedFrom: null }]);
+    writes.push(['cats', id, { mergedInto: null, unmergedAt: at }]);
+  }
+  const mb = keep && keep.mergeBefore;
+  if (undone && mb && mb.batch === r.batch) writes.push(['cats', r.keepId, { aliases: mb.aliases, thumbPhotoId: mb.thumbPhotoId, favourite: mb.favourite, homesMarked: mb.homesMarked, ...(mb.createdAt ? { createdAt: mb.createdAt } : {}), mergeBefore: null }]);
+  return { writes, undone };
+}
+// UNDO MERGE in Recently deleted: one merged-away cat back, for a Match or an older Concatenate merge.
+export function unmergeWrites(raw, loserId, at) {
+  const lose = raw.cats.find(c => c.id === loserId), writes = [];
+  for (const s of raw.sightings.filter(s => s.mergedFrom === loserId && s.catId === lose.mergedInto)) writes.push(['sightings', s.id, { catId: loserId, mergedFrom: null }]);
+  const keep = raw.cats.find(c => c.id === lose.mergedInto);
+  if (keep) {
+    const kp = {};
+    if ((keep.homesMarked || []).some(h => h.fromCat === loserId)) kp.homesMarked = keep.homesMarked.filter(h => h.fromCat !== loserId);
+    // A Match merge also takes back the alias it added and the earlier createdAt it lent the keeper.
+    if (lose.mergeBatch) {
+      const i = (keep.aliases || []).lastIndexOf(lose.aliasAdded); if (i >= 0) kp.aliases = keep.aliases.filter((_, j) => j !== i);
+      if (Number.isFinite(lose.keepCreatedAt)) { const still = raw.cats.filter(c => c.mergedInto === keep.id && c.id !== loserId && c.mergeBatch && !c.deleted); kp.createdAt = Math.min(lose.keepCreatedAt, ...still.map(c => c.createdAt || Infinity)); }
+    }
+    if (Object.keys(kp).length) writes.push(['cats', keep.id, kp]);
+  }
+  writes.push(['cats', loserId, { mergedInto: null, unmergedAt: at }]);
+  return writes;
+}
+// EXPORT: the whole log as plain objects (photo bytes left out; each photo is its id, path and size in pixels).
+export function exportLog(raw, summaries, photoMeta = {}) {
+  const cats = raw.cats.map(c => ({ ...c }));
+  const sightings = raw.sightings.map(s => ({ ...s }));
+  const ids = new Set(sightings.map(s => s.photoId).filter(Boolean));
+  const photos = [...ids].map(id => ({ id, path: 'photos/' + id, catId: (sightings.find(s => s.photoId === id) || {}).catId || null, ...(photoMeta[id] || {}) }));
+  const homes = households(summaries).map((h, i) => ({ id: 'h' + (i + 1), lat: h.lat, lng: h.lng, cats: h.cats.map(e => e.cat.id) }));
+  return { cats, sightings, photos, households: homes };
+}
+// CSV: one header row from the union of keys; arrays and objects as JSON; quotes doubled.
+export function toCsv(rows) {
+  const keys = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  const cell = v => { if (v === null || v === undefined) return ''; const t = typeof v === 'object' ? JSON.stringify(v) : String(v); return /[",\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  return [keys.join(','), ...rows.map(r => keys.map(k => cell(r[k])).join(','))].join('\r\n');
+}
